@@ -1,0 +1,939 @@
+-- RePoz - Скрипт телепортации с перемещаемым GUI
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local player = Players.LocalPlayer
+local enabled = false
+local targetPlayerName = ""
+local ignorePlayerName = ""
+local teleportAll = true
+
+-- Настройки скорости
+local originalWalkSpeed = 16
+local originalJumpPower = 50
+local customWalkSpeed = 16
+local customJumpPower = 50 -- Базовая высота 50
+local moveDirection = Vector3.new(0, 0, 0)
+local speedApplied = false
+local infiniteJumpEnabled = false
+
+-- Настройки фарма NPC
+local npcFarmEnabled = false
+local CurrentNPCName = "Jotaro Kujo"
+local farmPlatform = nil
+local platformFollowConnection = nil
+local farmConnection = nil
+local positionSaveConnection = nil
+local foundNPCs = {}
+local lastSearchTime = 0
+local lastGPressTime = 0
+local lastTPressTime = 0
+local lastXPressTime = 0
+local gKeyPressed = false
+local savedPosition = nil
+local platformHeight = 30 -- Высота платформы
+
+print("🚀 RePoz - Скрипт телепортации загружен!")
+
+-- ЗАЩИТА ОТ АНТИЧИТА
+local function antiCheatBypass()
+    local character = player.Character
+    if not character then return end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        humanoid.BreakJointsOnDeath = false
+        humanoid.RequiresNeck = false
+    end
+end
+
+player.CharacterAdded:Connect(function(character)
+    wait(1)
+    antiCheatBypass()
+end)
+
+-- Функция для проверки что игрок не в чате
+local function isPlayerTyping()
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if playerGui then
+        local chatBar = playerGui:FindFirstChild("Chat") 
+        if chatBar then
+            local chatFrame = chatBar:FindFirstChild("Frame")
+            if chatFrame then
+                local chatBox = chatFrame:FindFirstChild("ChatBar")
+                if chatBox and chatBox:IsA("TextBox") then
+                    return chatBox:IsFocused()
+                end
+            end
+        end
+    end
+    return false
+end
+
+-- Функция плотной телепортации в игрока
+local function ultraDenseTeleport()
+    if not enabled then return end
+    
+    local myChar = player.Character
+    if not myChar then return end
+    
+    local myHRP = myChar:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return end
+    
+    local myPos = myHRP.Position
+    
+    if teleportAll then
+        for _, otherPlayer in pairs(Players:GetPlayers()) do
+            if otherPlayer ~= player then
+                if ignorePlayerName ~= "" then
+                    local shouldIgnore = string.lower(otherPlayer.Name) == string.lower(ignorePlayerName) or 
+                                       string.lower(otherPlayer.DisplayName) == string.lower(ignorePlayerName)
+                    if shouldIgnore then
+                        continue
+                    end
+                end
+                
+                local otherChar = otherPlayer.Character
+                if otherChar then
+                    local otherHRP = otherChar:FindFirstChild("HumanoidRootPart")
+                    if otherHRP then
+                        local offset = Vector3.new(math.random(-1, 1), 0, math.random(-1, 1))
+                        otherHRP.CFrame = CFrame.new(myPos + offset)
+                    end
+                end
+            end
+        end
+    else
+        if targetPlayerName ~= "" then
+            local playersToTeleport = {}
+            
+            for name in string.gmatch(targetPlayerName, "[^,]+") do
+                local trimmedName = string.gsub(name, "^%s*(.-)%s*$", "%1")
+                if trimmedName ~= "" then
+                    table.insert(playersToTeleport, trimmedName)
+                end
+            end
+            
+            for _, targetName in ipairs(playersToTeleport) do
+                for _, otherPlayer in pairs(Players:GetPlayers()) do
+                    if otherPlayer ~= player then
+                        if string.lower(otherPlayer.Name) == string.lower(targetName) or 
+                           string.lower(otherPlayer.DisplayName) == string.lower(targetName) then
+                            local otherChar = otherPlayer.Character
+                            if otherChar then
+                                local otherHRP = otherChar:FindFirstChild("HumanoidRootPart")
+                                if otherHRP then
+                                    local offset = Vector3.new(math.random(-1, 1), 0, math.random(-1, 1))
+                                    otherHRP.CFrame = CFrame.new(myPos + offset)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Функция управления скоростью
+local function updateSpeedSystem()
+    if not speedApplied then return end
+    if isPlayerTyping() then return end
+    
+    local char = player.Character
+    if char and char:FindFirstChild("HumanoidRootPart") then
+        local bv = char.HumanoidRootPart:FindFirstChild("RePozSpeed")
+        if bv then bv:Destroy() end
+        
+        if moveDirection.Magnitude > 0 then
+            local newBv = Instance.new("BodyVelocity")
+            newBv.Name = "RePozSpeed"
+            
+            local camera = workspace.CurrentCamera
+            local cameraCFrame = camera.CFrame
+            
+            local right = cameraCFrame.RightVector * moveDirection.X
+            local forward = cameraCFrame.LookVector * -moveDirection.Z
+            local worldDirection = (right + forward) * customWalkSpeed
+            
+            worldDirection = Vector3.new(worldDirection.X, 0, worldDirection.Z)
+            
+            newBv.Velocity = worldDirection
+            newBv.MaxForce = Vector3.new(40000, 0, 40000)
+            newBv.Parent = char.HumanoidRootPart
+        end
+    end
+end
+
+-- BodyVelocity метод для прыжка (ИСПРАВЛЕН - не улетает в небо)
+local jumpCooldown = false
+local function updateJumpSystem()
+    if not speedApplied then return end
+    if jumpCooldown then return end
+    
+    local character = player.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local hrp = character.HumanoidRootPart
+    
+    if humanoid and humanoid:GetState() == Enum.HumanoidStateType.Jumping then
+        -- КД чтобы не улетать в небо
+        jumpCooldown = true
+        
+        local existingBv = hrp:FindFirstChild("RePozJump")
+        if not existingBv then
+            local bv = Instance.new("BodyVelocity")
+            bv.Name = "RePozJump"
+            bv.Velocity = Vector3.new(0, customJumpPower, 0)
+            bv.MaxForce = Vector3.new(0, 50000, 0)
+            bv.Parent = hrp
+            
+            -- Удаляем через короткое время
+            delay(0.2, function()
+                if bv and bv.Parent then
+                    bv:Destroy()
+                end
+            end)
+        end
+        
+        -- Сбрасываем КД через 0.5 сек
+        delay(0.5, function()
+            jumpCooldown = false
+        end)
+    end
+end
+
+-- Функция бесконечного прыжка (ИСПРАВЛЕНА - не улетает в небо)
+local infiniteJumpCooldown = false
+local function updateInfiniteJump()
+    if not infiniteJumpEnabled then return end
+    if isPlayerTyping() then return end
+    if infiniteJumpCooldown then return end
+    
+    local character = player.Character
+    if not character then return end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+        infiniteJumpCooldown = true
+        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        
+        -- КД для бесконечного прыжка
+        delay(0.3, function()
+            infiniteJumpCooldown = false
+        end)
+    end
+end
+
+-- Отслеживаем движение
+UserInputService.InputBegan:Connect(function(input)
+    if isPlayerTyping() then return end
+    
+    if input.KeyCode == Enum.KeyCode.W then
+        moveDirection = moveDirection + Vector3.new(0, 0, -1)
+    elseif input.KeyCode == Enum.KeyCode.S then
+        moveDirection = moveDirection + Vector3.new(0, 0, 1)
+    elseif input.KeyCode == Enum.KeyCode.A then
+        moveDirection = moveDirection + Vector3.new(-1, 0, 0)
+    elseif input.KeyCode == Enum.KeyCode.D then
+        moveDirection = moveDirection + Vector3.new(1, 0, 0)
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if isPlayerTyping() then return end
+    
+    if input.KeyCode == Enum.KeyCode.W then
+        moveDirection = moveDirection - Vector3.new(0, 0, -1)
+    elseif input.KeyCode == Enum.KeyCode.S then
+        moveDirection = moveDirection - Vector3.new(0, 0, 1)
+    elseif input.KeyCode == Enum.KeyCode.A then
+        moveDirection = moveDirection - Vector3.new(-1, 0, 0)
+    elseif input.KeyCode == Enum.KeyCode.D then
+        moveDirection = moveDirection - Vector3.new(1, 0, 0)
+    end
+end)
+
+-- ========== NPC FARMER ФУНКЦИИ ==========
+print("🎯 NPC Farmer модуль загружен!")
+
+-- Функция поиска NPC
+local function findNPCs(targetName)
+    local npcs = {}
+    for _, npc in pairs(workspace:GetDescendants()) do
+        if npc:IsA("Model") and npc.Name == targetName then
+            local humanoid = npc:FindFirstChildOfClass("Humanoid")
+            local rootPart = npc:FindFirstChild("HumanoidRootPart")
+            
+            if humanoid and humanoid.Health > 0 and rootPart then
+                table.insert(npcs, {
+                    model = npc,
+                    humanoid = humanoid,
+                    rootPart = rootPart
+                })
+            end
+        end
+    end
+    return npcs
+end
+
+-- Функция телепортации NPC к игроку
+local function teleportNPCsToPlayer()
+    local character = player.Character
+    if not character then return end
+    
+    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+    if not humanoidRootPart then return end
+    
+    local myPos = humanoidRootPart.Position
+    
+    for i, npcData in pairs(foundNPCs) do
+        if npcData.humanoid and npcData.humanoid.Health > 0 and npcData.rootPart then
+            -- Телепортируем NPC прямо в игрока
+            npcData.rootPart.CFrame = CFrame.new(myPos)
+        else
+            -- Удаляем мертвых NPC
+            foundNPCs[i] = nil
+        end
+    end
+end
+
+-- Функция создания платформы для фарма
+local function createFarmPlatform()
+    local character = player.Character
+    if not character then return end
+    
+    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+    if not humanoidRootPart then return end
+    
+    -- Сохраняем текущую позицию игрока (без поднятия)
+    local currentPos = humanoidRootPart.Position
+    savedPosition = Vector3.new(currentPos.X, currentPos.Y + platformHeight, currentPos.Z)
+    
+    -- Удаляем старую платформу если есть
+    if farmPlatform then
+        farmPlatform:Destroy()
+        farmPlatform = nil
+    end
+    
+    if platformFollowConnection then
+        platformFollowConnection:Disconnect()
+        platformFollowConnection = nil
+    end
+    
+    -- Телепортируем игрока на platformHeight вверх
+    humanoidRootPart.CFrame = CFrame.new(savedPosition)
+    
+    -- Создаем невидимую платформу ПОД игроком
+    farmPlatform = Instance.new("Part")
+    farmPlatform.Name = "FarmPlatform"
+    farmPlatform.Size = Vector3.new(20, 1, 20)
+    farmPlatform.Position = Vector3.new(savedPosition.X, savedPosition.Y - 5, savedPosition.Z)
+    farmPlatform.Anchored = true
+    farmPlatform.CanCollide = true
+    farmPlatform.Transparency = 1  -- Полностью невидимая
+    farmPlatform.Parent = workspace
+    
+    -- Делаем платформу перемещаемой за игроком
+    platformFollowConnection = RunService.Heartbeat:Connect(function()
+        if farmPlatform and farmPlatform.Parent and npcFarmEnabled then
+            local character = player.Character
+            if character and character:FindFirstChild("HumanoidRootPart") then
+                local hrp = character.HumanoidRootPart
+                -- Платформа следует за игроком по X и Z, но остается на своей высоте
+                farmPlatform.Position = Vector3.new(hrp.Position.X, savedPosition.Y - 5, hrp.Position.Z)
+            end
+        else
+            if platformFollowConnection then
+                platformFollowConnection:Disconnect()
+            end
+        end
+    end)
+    
+    print("🔼 Поднят на " .. platformHeight .. " единиц вверх")
+    print("💾 Позиция сохранена: " .. tostring(savedPosition))
+end
+
+-- Функция возврата на сохраненную позицию
+local function returnToSavedPosition()
+    if savedPosition and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+        local hrp = player.Character.HumanoidRootPart
+        -- Плавно телепортируем на сохраненную позицию
+        hrp.CFrame = CFrame.new(savedPosition)
+    end
+end
+
+-- Функция удаления платформы
+local function removeFarmPlatform()
+    if farmPlatform then
+        farmPlatform:Destroy()
+        farmPlatform = nil
+    end
+    
+    if platformFollowConnection then
+        platformFollowConnection:Disconnect()
+        platformFollowConnection = nil
+    end
+    
+    if positionSaveConnection then
+        positionSaveConnection:Disconnect()
+        positionSaveConnection = nil
+    end
+    
+    savedPosition = nil
+    print("🗑️ Платформа и сохраненная позиция удалены")
+end
+
+-- Функция для симуляции нажатия клавиш
+local function simulateKeyPress(keyCode, duration)
+    if not npcFarmEnabled then return end
+    
+    VirtualInputManager:SendKeyEvent(true, keyCode, false, nil)
+    
+    if duration then
+        delay(duration, function()
+            if npcFarmEnabled then
+                VirtualInputManager:SendKeyEvent(false, keyCode, false, nil)
+            end
+        end)
+    else
+        VirtualInputManager:SendKeyEvent(false, keyCode, false, nil)
+    end
+end
+
+-- Функция авто-нажатия клавиш
+local function handleAutoKeys()
+    if not npcFarmEnabled then return end
+    
+    local currentTime = tick()
+    
+    -- Нажатие G на 3 секунды каждые 40 секунд
+    if currentTime - lastGPressTime >= 40 then
+        print("🔒 Нажимаю G на 3 секунды...")
+        gKeyPressed = true
+        simulateKeyPress(Enum.KeyCode.G, 3)
+        lastGPressTime = currentTime
+        
+        delay(3, function()
+            gKeyPressed = false
+        end)
+    end
+    
+    -- Нажатие T каждые 2 секунды (если G не нажата)
+    if currentTime - lastTPressTime >= 2 and not gKeyPressed then
+        simulateKeyPress(Enum.KeyCode.T, 0.1)
+        lastTPressTime = currentTime
+    end
+    
+    -- Нажатие X каждые 2 секунды (если G не нажата)
+    if currentTime - lastXPressTime >= 2 and not gKeyPressed then
+        simulateKeyPress(Enum.KeyCode.X, 0.1)
+        lastXPressTime = currentTime
+    end
+end
+
+-- ========== СОЗДАНИЕ GUI ==========
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "RePozGUI"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 320, 0, 250)
+mainFrame.Position = UDim2.new(0, 10, 0, 10)
+mainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.ZIndex = 1
+mainFrame.Parent = screenGui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 8)
+corner.Parent = mainFrame
+
+-- Заголовок
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 30)
+titleBar.Position = UDim2.new(0, 0, 0, 0)
+titleBar.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+titleBar.ZIndex = 2
+titleBar.Parent = mainFrame
+
+local titleText = Instance.new("TextLabel")
+titleText.Size = UDim2.new(0.7, 0, 1, 0)
+titleText.Position = UDim2.new(0, 5, 0, 0)
+titleText.BackgroundTransparency = 1
+titleText.Text = "🔧 RePoz v3.0"
+titleText.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleText.Font = Enum.Font.GothamBold
+titleText.TextSize = 14
+titleText.TextXAlignment = Enum.TextXAlignment.Left
+titleText.ZIndex = 3
+titleText.Parent = titleBar
+
+-- Кнопка закрытия
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.new(0, 20, 0, 20)
+closeButton.Position = UDim2.new(1, -25, 0, 5)
+closeButton.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
+closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeButton.Font = Enum.Font.GothamBold
+closeButton.TextSize = 12
+closeButton.Text = "X"
+closeButton.ZIndex = 3
+closeButton.Parent = titleBar
+
+-- Вкладки
+local tabsFrame = Instance.new("Frame")
+tabsFrame.Size = UDim2.new(1, 0, 0, 25)
+tabsFrame.Position = UDim2.new(0, 0, 0, 30)
+tabsFrame.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+tabsFrame.BorderSizePixel = 0
+tabsFrame.ZIndex = 2
+tabsFrame.Parent = mainFrame
+
+local teleportTab = Instance.new("TextButton")
+teleportTab.Size = UDim2.new(0.33, 0, 1, 0)
+teleportTab.Position = UDim2.new(0, 0, 0, 0)
+teleportTab.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+teleportTab.TextColor3 = Color3.fromRGB(255, 255, 255)
+teleportTab.Font = Enum.Font.GothamBold
+teleportTab.TextSize = 11
+teleportTab.Text = "📡 Телепорт"
+teleportTab.ZIndex = 3
+teleportTab.Parent = tabsFrame
+
+local speedTab = Instance.new("TextButton")
+speedTab.Size = UDim2.new(0.33, 0, 1, 0)
+speedTab.Position = UDim2.new(0.33, 0, 0, 0)
+speedTab.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+speedTab.TextColor3 = Color3.fromRGB(200, 200, 200)
+speedTab.Font = Enum.Font.GothamBold
+speedTab.TextSize = 11
+speedTab.Text = "⚡ Скорость"
+speedTab.ZIndex = 3
+speedTab.Parent = tabsFrame
+
+local farmTab = Instance.new("TextButton")
+farmTab.Size = UDim2.new(0.34, 0, 1, 0)
+farmTab.Position = UDim2.new(0.66, 0, 0, 0)
+farmTab.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+farmTab.TextColor3 = Color3.fromRGB(200, 200, 200)
+farmTab.Font = Enum.Font.GothamBold
+farmTab.TextSize = 11
+farmTab.Text = "🌾 Фарм"
+farmTab.ZIndex = 3
+farmTab.Parent = tabsFrame
+
+-- Контент телепорта
+local teleportContent = Instance.new("Frame")
+teleportContent.Size = UDim2.new(1, 0, 1, -55)
+teleportContent.Position = UDim2.new(0, 0, 0, 55)
+teleportContent.BackgroundTransparency = 1
+teleportContent.Visible = true
+teleportContent.ZIndex = 2
+teleportContent.Parent = mainFrame
+
+-- Контент скорости
+local speedContent = Instance.new("Frame")
+speedContent.Size = UDim2.new(1, 0, 1, -55)
+speedContent.Position = UDim2.new(0, 0, 0, 55)
+speedContent.BackgroundTransparency = 1
+speedContent.Visible = false
+speedContent.ZIndex = 2
+speedContent.Parent = mainFrame
+
+-- Контент фарма
+local farmContent = Instance.new("Frame")
+farmContent.Size = UDim2.new(1, 0, 1, -55)
+farmContent.Position = UDim2.new(0, 0, 0, 55)
+farmContent.BackgroundTransparency = 1
+farmContent.Visible = false
+farmContent.ZIndex = 2
+farmContent.Parent = mainFrame
+
+-- === ТЕЛЕПОРт ВКЛАДКА ===
+local searchBox = Instance.new("TextBox")
+searchBox.Size = UDim2.new(0.8, 0, 0, 20)
+searchBox.Position = UDim2.new(0.1, 0, 0.1, 0)
+searchBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+searchBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+searchBox.Font = Enum.Font.Gotham
+searchBox.TextSize = 10
+searchBox.PlaceholderText = "Ник цели (через запятую)"
+searchBox.ZIndex = 2
+searchBox.Parent = teleportContent
+
+local ignoreBox = Instance.new("TextBox")
+ignoreBox.Size = UDim2.new(0.8, 0, 0, 20)
+ignoreBox.Position = UDim2.new(0.1, 0, 0.25, 0)
+ignoreBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+ignoreBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+ignoreBox.Font = Enum.Font.Gotham
+ignoreBox.TextSize = 10
+ignoreBox.PlaceholderText = "Не телепортировать (через запятую)"
+ignoreBox.ZIndex = 2
+ignoreBox.Parent = teleportContent
+
+local button = Instance.new("TextButton")
+button.Size = UDim2.new(0.8, 0, 0, 35)
+button.Position = UDim2.new(0.1, 0, 0.45, 0)
+button.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+button.Text = "ВКЛ Телепорт ВСЕХ"
+button.TextColor3 = Color3.fromRGB(255, 255, 255)
+button.Font = Enum.Font.GothamBold
+button.TextSize = 12
+button.ZIndex = 2
+button.Parent = teleportContent
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(0.8, 0, 0, 20)
+statusLabel.Position = UDim2.new(0.1, 0, 0.65, 0)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Режим: Все игроки"
+statusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextSize = 9
+statusLabel.ZIndex = 2
+statusLabel.Parent = teleportContent
+
+-- === СКОРОСТЬ ВКЛАДКА ===
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Size = UDim2.new(0.8, 0, 0, 20)
+speedLabel.Position = UDim2.new(0.1, 0, 0.1, 0)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Text = "Скорость бега: " .. originalWalkSpeed
+speedLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+speedLabel.Font = Enum.Font.Gotham
+speedLabel.TextSize = 12
+speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+speedLabel.ZIndex = 2
+speedLabel.Parent = speedContent
+
+local speedBox = Instance.new("TextBox")
+speedBox.Size = UDim2.new(0.6, 0, 0, 20)
+speedBox.Position = UDim2.new(0.1, 0, 0.2, 0)
+speedBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+speedBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+speedBox.Font = Enum.Font.Gotham
+speedBox.TextSize = 12
+speedBox.Text = tostring(originalWalkSpeed)
+speedBox.PlaceholderText = "Скорость"
+speedBox.ZIndex = 2
+speedBox.Parent = speedContent
+
+local jumpLabel = Instance.new("TextLabel")
+jumpLabel.Size = UDim2.new(0.8, 0, 0, 20)
+jumpLabel.Position = UDim2.new(0.1, 0, 0.35, 0)
+jumpLabel.BackgroundTransparency = 1
+jumpLabel.Text = "Высота прыжка: " .. customJumpPower
+jumpLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+jumpLabel.Font = Enum.Font.Gotham
+jumpLabel.TextSize = 12
+jumpLabel.TextXAlignment = Enum.TextXAlignment.Left
+jumpLabel.ZIndex = 2
+jumpLabel.Parent = speedContent
+
+local jumpBox = Instance.new("TextBox")
+jumpBox.Size = UDim2.new(0.6, 0, 0, 20)
+jumpBox.Position = UDim2.new(0.1, 0, 0.45, 0)
+jumpBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+jumpBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+jumpBox.Font = Enum.Font.Gotham
+jumpBox.TextSize = 12
+jumpBox.Text = tostring(customJumpPower)
+jumpBox.PlaceholderText = "Прыжок"
+jumpBox.ZIndex = 2
+jumpBox.Parent = speedContent
+
+-- Кнопка бесконечного прыжка
+local infiniteJumpButton = Instance.new("TextButton")
+infiniteJumpButton.Size = UDim2.new(0.8, 0, 0, 25)
+infiniteJumpButton.Position = UDim2.new(0.1, 0, 0.6, 0)
+infiniteJumpButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+infiniteJumpButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+infiniteJumpButton.Font = Enum.Font.GothamBold
+infiniteJumpButton.TextSize = 11
+infiniteJumpButton.Text = "ВКЛ Бесконечный прыжок"
+infiniteJumpButton.ZIndex = 2
+infiniteJumpButton.Parent = speedContent
+
+local applySpeedButton = Instance.new("TextButton")
+applySpeedButton.Size = UDim2.new(0.8, 0, 0, 25)
+applySpeedButton.Position = UDim2.new(0.1, 0, 0.75, 0)
+applySpeedButton.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+applySpeedButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+applySpeedButton.Font = Enum.Font.GothamBold
+applySpeedButton.TextSize = 11
+applySpeedButton.Text = "Применить настройки"
+applySpeedButton.ZIndex = 2
+applySpeedButton.Parent = speedContent
+
+-- === ФАРМ ВКЛАДКА ===
+-- Поле ввода NPC
+local npcInputLabel = Instance.new("TextLabel")
+npcInputLabel.Size = UDim2.new(0.8, 0, 0, 20)
+npcInputLabel.Position = UDim2.new(0.1, 0, 0.05, 0)
+npcInputLabel.BackgroundTransparency = 1
+npcInputLabel.Text = "Имя NPC:"
+npcInputLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+npcInputLabel.Font = Enum.Font.Gotham
+npcInputLabel.TextSize = 11
+npcInputLabel.TextXAlignment = Enum.TextXAlignment.Left
+npcInputLabel.ZIndex = 2
+npcInputLabel.Parent = farmContent
+
+local npcSearchBox = Instance.new("TextBox")
+npcSearchBox.Size = UDim2.new(0.8, 0, 0, 25)
+npcSearchBox.Position = UDim2.new(0.1, 0, 0.15, 0)
+npcSearchBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+npcSearchBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+npcSearchBox.Font = Enum.Font.Gotham
+npcSearchBox.TextSize = 11
+npcSearchBox.PlaceholderText = "Jotaro Kujo, Dio Brando..."
+npcSearchBox.Text = CurrentNPCName
+npcSearchBox.ZIndex = 2
+npcSearchBox.Parent = farmContent
+
+-- Кнопка старта/стопа фарма
+local farmButton = Instance.new("TextButton")
+farmButton.Size = UDim2.new(0.8, 0, 0, 35)
+farmButton.Position = UDim2.new(0.1, 0, 0.35, 0)
+farmButton.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+farmButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+farmButton.Font = Enum.Font.GothamBold
+farmButton.TextSize = 12
+farmButton.Text = "🚀 НАЧАТЬ ФАРМ"
+farmButton.ZIndex = 2
+farmButton.Parent = farmContent
+
+-- Статус фарма
+local farmStatusLabel = Instance.new("TextLabel")
+farmStatusLabel.Size = UDim2.new(0.8, 0, 0, 40)
+farmStatusLabel.Position = UDim2.new(0.1, 0, 0.65, 0)
+farmStatusLabel.BackgroundTransparency = 1
+farmStatusLabel.Text = "Статус: Выключено\nВысота: 30 | Платформа следует"
+farmStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+farmStatusLabel.Font = Enum.Font.Gotham
+farmStatusLabel.TextSize = 9
+farmStatusLabel.TextXAlignment = Enum.TextXAlignment.Center
+farmStatusLabel.ZIndex = 2
+farmStatusLabel.Parent = farmContent
+
+-- Обработчики
+searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+    if searchBox.Text == "" then
+        teleportAll = true
+        targetPlayerName = ""
+        button.Text = "ВКЛ Телепорт ВСЕХ"
+    else
+        teleportAll = false
+        targetPlayerName = searchBox.Text
+        button.Text = "ВКЛ Телепорт ВЫБРАННЫХ"
+    end
+    statusLabel.Text = "Цель: " .. (targetPlayerName == "" and "Все" or targetPlayerName)
+end)
+
+ignoreBox:GetPropertyChangedSignal("Text"):Connect(function()
+    ignorePlayerName = ignoreBox.Text
+end)
+
+button.MouseButton1Click:Connect(function()
+    enabled = not enabled
+    if enabled then
+        button.Text = "ВЫКЛ Телепорт " .. (teleportAll and "ВСЕХ" or "ВЫБРАННЫХ")
+        button.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
+    else
+        button.Text = "ВКЛ Телепорт " .. (teleportAll and "ВСЕХ" or "ВЫБРАННЫХ")
+        button.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+    end
+end)
+
+-- Обработчики вкладок
+teleportTab.MouseButton1Click:Connect(function()
+    teleportContent.Visible = true
+    speedContent.Visible = false
+    farmContent.Visible = false
+    teleportTab.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+    speedTab.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    farmTab.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+end)
+
+speedTab.MouseButton1Click:Connect(function()
+    teleportContent.Visible = false
+    speedContent.Visible = true
+    farmContent.Visible = false
+    teleportTab.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    speedTab.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+    farmTab.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+end)
+
+farmTab.MouseButton1Click:Connect(function()
+    teleportContent.Visible = false
+    speedContent.Visible = false
+    farmContent.Visible = true
+    teleportTab.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    speedTab.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    farmTab.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+end)
+
+-- Обработчик бесконечного прыжка
+infiniteJumpButton.MouseButton1Click:Connect(function()
+    infiniteJumpEnabled = not infiniteJumpEnabled
+    if infiniteJumpEnabled then
+        infiniteJumpButton.Text = "ВЫКЛ Бесконечный прыжок"
+        infiniteJumpButton.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
+        print("✅ Бесконечный прыжок ВКЛ")
+    else
+        infiniteJumpButton.Text = "ВКЛ Бесконечный прыжок"
+        infiniteJumpButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        print("❌ Бесконечный прыжок ВЫКЛ")
+    end
+end)
+
+applySpeedButton.MouseButton1Click:Connect(function()
+    local newSpeed = tonumber(speedBox.Text)
+    local newJump = tonumber(jumpBox.Text)
+    
+    if newSpeed then
+        customWalkSpeed = newSpeed
+        speedLabel.Text = "Скорость бега: " .. newSpeed
+    end
+    
+    if newJump then
+        customJumpPower = newJump
+        jumpLabel.Text = "Высота прыжка: " .. newJump
+        print("✅ Высота прыжка установлена: " .. newJump)
+    end
+    
+    speedApplied = true
+    print("✅ Настройки применены! Скорость: " .. (newSpeed or customWalkSpeed) .. ", Прыжок: " .. (newJump or customJumpPower))
+end)
+
+-- Обработчик кнопки фарма NPC
+farmButton.MouseButton1Click:Connect(function()
+    npcFarmEnabled = not npcFarmEnabled
+    
+    if npcFarmEnabled then
+        local npcName = npcSearchBox.Text
+        if npcName == "" then
+            npcName = "Jotaro Kujo"
+            npcSearchBox.Text = npcName
+        end
+        
+        CurrentNPCName = npcName
+        farmButton.Text = "🛑 ОСТАНОВИТЬ"
+        farmButton.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
+        farmStatusLabel.Text = "Статус: Фармим " .. npcName .. "\nВысота: 30 | Платформа следует"
+        
+        -- Создаем платформу и поднимаем на 30
+        createFarmPlatform()
+        
+        -- Сбрасываем таймеры
+        lastGPressTime = tick()
+        lastTPressTime = tick()
+        lastXPressTime = tick()
+        
+        print("🎯 Фарм запущен для: " .. npcName)
+        print("🔼 Высота: 30 единиц")
+        print("📦 Платформа следует за игроком")
+        
+        -- Запускаем основной цикл
+        if farmConnection then
+            farmConnection:Disconnect()
+        end
+        
+        farmConnection = RunService.Heartbeat:Connect(function()
+            local currentTime = tick()
+            
+            -- Поиск NPC каждые 3 секунды
+            if currentTime - lastSearchTime > 3 then
+                foundNPCs = findNPCs(CurrentNPCName)
+                lastSearchTime = currentTime
+                
+                if #foundNPCs > 0 then
+                    farmStatusLabel.Text = "Статус: " .. CurrentNPCName .. " (" .. #foundNPCs .. ")\nВысота: 30 | Платформа следует"
+                end
+            end
+            
+            -- Телепортация NPC
+            teleportNPCsToPlayer()
+            
+            -- Авто-кнопки
+            handleAutoKeys()
+            
+            -- Авто-возврат на сохраненную позицию каждые 2 секунды
+            if currentTime % 0.5 < 0.1 then -- Каждые ~2 секунды
+                returnToSavedPosition()
+            end
+        end)
+        
+    else
+        farmButton.Text = "🚀 НАЧАТЬ ФАРМ"
+        farmButton.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+        farmStatusLabel.Text = "Статус: Выключено\nВысота: 30 | Платформа следует"
+        
+        -- Останавливаем все
+        if farmConnection then
+            farmConnection:Disconnect()
+            farmConnection = nil
+        end
+        
+        removeFarmPlatform()
+        foundNPCs = {}
+        
+        print("🛑 Фарм остановлен")
+    end
+end)
+
+closeButton.MouseButton1Click:Connect(function()
+    screenGui:Destroy()
+    enabled = false
+    npcFarmEnabled = false
+    
+    if farmPlatform then
+        farmPlatform:Destroy()
+    end
+    if platformFollowConnection then
+        platformFollowConnection:Disconnect()
+    end
+    if farmConnection then
+        farmConnection:Disconnect()
+    end
+    if positionSaveConnection then
+        positionSaveConnection:Disconnect()
+    end
+    
+    print("❌ RePoz GUI закрыт")
+end)
+
+-- Добавляем GUI в игрока
+screenGui.Parent = player.PlayerGui
+
+-- Циклы обновления
+RunService.Heartbeat:Connect(function()
+    ultraDenseTeleport()
+    updateSpeedSystem()
+    updateInfiniteJump()
+    updateJumpSystem()
+    
+    -- ЗАЩИТА ОТ УРОНА
+    local character = player.Character
+    if character then
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            if humanoid.Health < humanoid.MaxHealth then
+                humanoid.Health = humanoid.MaxHealth
+            end
+        end
+    end
+end)
+
+print("✅ RePoz полностью загружен!")
+print("🎯 NPC Farmer интегрирован во вкладку Фарм!")
+print("🔼 Высота поднятия: 30 единиц")
+print("📦 Платформа следует за игроком")
