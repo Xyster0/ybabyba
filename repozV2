@@ -34,13 +34,16 @@ local lastXPressTime = 0
 local gKeyPressed = false
 local savedPosition = nil
 local platformHeight = 30 -- Высота платформы
-local returnSpeed = 100 -- Скорость полета при возврате
+local returnSpeed = 30 -- Скорость полета при возврате
 local lastReturnTime = 0 -- Время последнего возврата
 local killAllNPCs = true -- Флаг для убийства всех NPC или одного
 local selectedNPC = nil -- Выбранный NPC для фарма
 local originalCollision = true -- Сохранение исходного состояния коллизии
 local currentNPCIndex = 1 -- Текущий индекс выбранного NPC
 local lastKilledNPCId = nil -- ID последнего убитого NPC
+
+-- ЧЕРНЫЙ СПИСОК NPC
+local blacklistedNPCs = {} -- Таблица для хранения ID заблокированных NPC
 
 print("🚀 RePoz - Скрипт телепортации загружен!")
 
@@ -267,7 +270,64 @@ end)
 -- ========== NPC FARMER ФУНКЦИИ ==========
 print("🎯 NPC Farmer модуль загружен!")
 
--- Функция поиска NPC
+-- Функция проверки NPC на наличие в черном списке
+local function isNPCBlacklisted(npcId)
+    return blacklistedNPCs[npcId] == true
+end
+
+-- Функция добавления NPC в черный список
+local function addToBlacklist(npcData)
+    if not npcData then return end
+    
+    local npcId = npcData.id
+    blacklistedNPCs[npcId] = true
+    
+    print("🚫 NPC добавлен в черный список: " .. getNPCInfo(npcData))
+    print("📋 Всего в черном списке: " .. getBlacklistCount() .. " NPC")
+    
+    -- Удаляем из найденных NPC если он там есть
+    for i, foundNPC in ipairs(foundNPCs) do
+        if foundNPC.id == npcId then
+            table.remove(foundNPCs, i)
+            break
+        end
+    end
+    
+    -- Если это был выбранный NPC, сбрасываем выбор
+    if selectedNPC and selectedNPC.id == npcId then
+        selectedNPC = nil
+        currentNPCIndex = 1
+        print("🔁 Сброшен выбор NPC (добавлен в черный список)")
+    end
+    
+    updateFarmStatus()
+end
+
+-- Функция удаления NPC из черного списка
+local function removeFromBlacklist(npcId)
+    blacklistedNPCs[npcId] = nil
+    print("✅ NPC удален из черного списка")
+    print("📋 Всего в черном списке: " .. getBlacklistCount() .. " NPC")
+    updateFarmStatus()
+end
+
+-- Функция очистки черного списка
+local function clearBlacklist()
+    blacklistedNPCs = {}
+    print("🗑️ Черный список очищен")
+    updateFarmStatus()
+end
+
+-- Функция получения количества NPC в черном списке
+local function getBlacklistCount()
+    local count = 0
+    for _ in pairs(blacklistedNPCs) do
+        count = count + 1
+    end
+    return count
+end
+
+-- Функция поиска NPC с учетом черного списка
 local function findNPCs(targetName)
     local npcs = {}
     for _, npc in pairs(workspace:GetDescendants()) do
@@ -276,12 +336,19 @@ local function findNPCs(targetName)
             local rootPart = npc:FindFirstChild("HumanoidRootPart")
             
             if humanoid and humanoid.Health > 0 and rootPart then
-                table.insert(npcs, {
-                    model = npc,
-                    humanoid = humanoid,
-                    rootPart = rootPart,
-                    id = tostring(npc:GetDebugId())
-                })
+                local npcId = tostring(npc:GetDebugId())
+                
+                -- Проверяем, не в черном списке ли NPC
+                if not isNPCBlacklisted(npcId) then
+                    table.insert(npcs, {
+                        model = npc,
+                        humanoid = humanoid,
+                        rootPart = rootPart,
+                        id = npcId
+                    })
+                else
+                    print("🚫 Пропущен NPC из черного списка: " .. npcId)
+                end
             end
         end
     end
@@ -340,7 +407,7 @@ end
 local function selectNextNPC()
     if killAllNPCs then
         print("❌ Сначала переключитесь в режим 'Один NPC'")
-        return
+        return nil
     end
     
     if #foundNPCs == 0 then
@@ -693,7 +760,7 @@ screenGui.ResetOnSpawn = false
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 350, 0, 350)
+mainFrame.Size = UDim2.new(0, 350, 0, 400) -- Увеличили высоту для новой кнопки
 mainFrame.Position = UDim2.new(0, 10, 0, 10)
 mainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 mainFrame.BorderSizePixel = 0
@@ -718,7 +785,7 @@ local titleText = Instance.new("TextLabel")
 titleText.Size = UDim2.new(0.7, 0, 1, 0)
 titleText.Position = UDim2.new(0, 5, 0, 0)
 titleText.BackgroundTransparency = 1
-titleText.Text = "🔧 RePoz v3.0"
+titleText.Text = "🔧 RePoz v3.1"
 titleText.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleText.Font = Enum.Font.GothamBold
 titleText.TextSize = 14
@@ -953,7 +1020,7 @@ npcSearchBox.Parent = farmContent
 -- Кнопка выбора режима фарма
 local farmModeButton = Instance.new("TextButton")
 farmModeButton.Size = UDim2.new(0.8, 0, 0, 25)
-farmModeButton.Position = UDim2.new(0.1, 0, 0.4, 0)
+farmModeButton.Position = UDim2.new(0.1, 0, 0.3, 0)
 farmModeButton.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
 farmModeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 farmModeButton.Font = Enum.Font.GothamBold
@@ -965,7 +1032,7 @@ farmModeButton.Parent = farmContent
 -- Кнопка выбора следующего NPC
 local selectNPCButton = Instance.new("TextButton")
 selectNPCButton.Size = UDim2.new(0.8, 0, 0, 25)
-selectNPCButton.Position = UDim2.new(0.1, 0, 0.55, 0)
+selectNPCButton.Position = UDim2.new(0.1, 0, 0.4, 0)
 selectNPCButton.BackgroundColor3 = Color3.fromRGB(33, 150, 243)
 selectNPCButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 selectNPCButton.Font = Enum.Font.GothamBold
@@ -973,6 +1040,30 @@ selectNPCButton.TextSize = 11
 selectNPCButton.Text = "Следующий NPC"
 selectNPCButton.ZIndex = 2
 selectNPCButton.Parent = farmContent
+
+-- НОВАЯ КНОПКА: Добавить в черный список
+local blacklistButton = Instance.new("TextButton")
+blacklistButton.Size = UDim2.new(0.8, 0, 0, 25)
+blacklistButton.Position = UDim2.new(0.1, 0, 0.5, 0)
+blacklistButton.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
+blacklistButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+blacklistButton.Font = Enum.Font.GothamBold
+blacklistButton.TextSize = 11
+blacklistButton.Text = "🚫 Добавить в черный список"
+blacklistButton.ZIndex = 2
+blacklistButton.Parent = farmContent
+
+-- Кнопка очистки черного списка
+local clearBlacklistButton = Instance.new("TextButton")
+clearBlacklistButton.Size = UDim2.new(0.8, 0, 0, 20)
+clearBlacklistButton.Position = UDim2.new(0.1, 0, 0.6, 0)
+clearBlacklistButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+clearBlacklistButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+clearBlacklistButton.Font = Enum.Font.Gotham
+clearBlacklistButton.TextSize = 10
+clearBlacklistButton.Text = "Очистить черный список"
+clearBlacklistButton.ZIndex = 2
+clearBlacklistButton.Parent = farmContent
 
 -- Настройка скорости возврата
 local returnSpeedLabel = Instance.new("TextLabel")
@@ -1013,10 +1104,10 @@ farmButton.Parent = farmContent
 
 -- Статус фарма
 local farmStatusLabel = Instance.new("TextLabel")
-farmStatusLabel.Size = UDim2.new(0.8, 0, 0, 40)
+farmStatusLabel.Size = UDim2.new(0.8, 0, 0, 50)
 farmStatusLabel.Position = UDim2.new(0.1, 0, 1.05, 0)
 farmStatusLabel.BackgroundTransparency = 1
-farmStatusLabel.Text = "Статус: Выключено\nКоллизия: Вкл | Режим: Все"
+farmStatusLabel.Text = "Статус: Выключено\nКоллизия: Вкл | Режим: Все\nЧерный список: 0 NPC"
 farmStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
 farmStatusLabel.Font = Enum.Font.Gotham
 farmStatusLabel.TextSize = 9
@@ -1130,6 +1221,7 @@ local function updateFarmStatus()
     local statusText = "Статус: " .. (npcFarmEnabled and "Фармим " .. CurrentNPCName or "Выключено")
     statusText = statusText .. "\nКоллизия: " .. (npcFarmEnabled and "Выкл" or "Вкл")
     statusText = statusText .. " | Режим: " .. (killAllNPCs and "Все" or "Один")
+    statusText = statusText .. "\nЧерный список: " .. getBlacklistCount() .. " NPC"
     
     if not killAllNPCs and selectedNPC then
         statusText = statusText .. "\nВыбран: " .. currentNPCIndex .. "/" .. #foundNPCs .. " " .. getNPCInfo(selectedNPC)
@@ -1180,6 +1272,31 @@ selectNPCButton.MouseButton1Click:Connect(function()
     updateFarmStatus()
 end)
 
+-- Обработчик кнопки добавления в черный список
+blacklistButton.MouseButton1Click:Connect(function()
+    if killAllNPCs then
+        print("❌ Переключитесь в режим 'Один NPC' чтобы выбрать NPC для черного списка")
+        return
+    end
+    
+    if not selectedNPC then
+        print("❌ Сначала выберите NPC кнопкой 'Следующий NPC'")
+        return
+    end
+    
+    -- Добавляем выбранного NPC в черный список
+    addToBlacklist(selectedNPC)
+    
+    -- Автоматически выбираем следующего NPC
+    selectNextNPC()
+    updateFarmStatus()
+end)
+
+-- Обработчик кнопки очистки черного списка
+clearBlacklistButton.MouseButton1Click:Connect(function()
+    clearBlacklist()
+end)
+
 -- Обработчик кнопки фарма NPC
 farmButton.MouseButton1Click:Connect(function()
     npcFarmEnabled = not npcFarmEnabled
@@ -1208,6 +1325,7 @@ farmButton.MouseButton1Click:Connect(function()
         print("🔼 Высота: 30 единиц")
         print("🚫 Коллизия отключена")
         print("🎯 Режим: " .. (killAllNPCs and "Все NPC" or "Один NPC"))
+        print("📋 Черный список: " .. getBlacklistCount() .. " NPC")
         
         if not killAllNPCs and #foundNPCs > 0 then
             if not selectedNPC then
@@ -1324,12 +1442,14 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
-print("✅ RePoz полностью загружен!")
+print("✅ RePoz v3.1 с черным списком загружен!")
 print("🎯 NPC Farmer интегрирован во вкладку Фарм!")
 print("🔼 Высота поднятия: 30 единиц")
 print("🚫 Коллизия отключается при фарме")
 print("🎯 Режимы: Все NPC или выбор конкретного")
 print("🔄 Кнопка 'Следующий NPC' для переключения между NPC")
+print("🚫 Кнопка 'Добавить в черный список' для блокировки NPC")
+print("🗑️ Кнопка 'Очистить черный список' для сброса")
 print("🔒 Авто-G: каждые 25 секунд на 3 секунды")
 print("⚡ T и X: каждую секунду")
 print("🎯 В режиме одного NPC всегда выбирается тот же NPC, которого вы убивали до этого")
