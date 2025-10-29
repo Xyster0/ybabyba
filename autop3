@@ -1,0 +1,575 @@
+local LocalPlayer = game.Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+local Humanoid = Character:WaitForChild("Humanoid")
+local RemoteEvent = Character:WaitForChild("RemoteEvent")
+
+-- Координаты
+local DIO_POS = Vector3.new(180, -26, 585)
+
+-- Настройки фарма
+local TargetNPC = "Jotaro"
+local isFarming = false
+local lastHealth = Humanoid.Health
+local isDodging = false
+local isDead = false
+
+-- Переменные
+local currentTarget = nil
+local flyingPlatform = nil
+local dodgePlatform = nil
+local maintainDistanceThread = nil
+
+-- Функция для создания летающей платформы
+local function createFlyingPlatform()
+    if flyingPlatform then
+        flyingPlatform:Destroy()
+    end
+    
+    flyingPlatform = Instance.new("Part")
+    flyingPlatform.Name = "FlyingPlatform"
+    flyingPlatform.Size = Vector3.new(20, 2, 20)
+    flyingPlatform.Anchored = true
+    flyingPlatform.CanCollide = true
+    flyingPlatform.Transparency = 1
+    flyingPlatform.Parent = workspace
+end
+
+-- Функция для создания платформы для доджа
+local function createDodgePlatform(position)
+    if dodgePlatform then
+        dodgePlatform:Destroy()
+    end
+    
+    dodgePlatform = Instance.new("Part")
+    dodgePlatform.Name = "DodgePlatform"
+    dodgePlatform.Size = Vector3.new(10, 2, 10)
+    dodgePlatform.Anchored = true
+    dodgePlatform.CanCollide = true
+    dodgePlatform.Transparency = 0.5
+    dodgePlatform.BrickColor = BrickColor.new("Bright red")
+    dodgePlatform.Material = Enum.Material.Neon
+    dodgePlatform.Parent = workspace
+    dodgePlatform.Position = position
+end
+
+-- Функция для обновления позиции летающей платформы
+local function updateFlyingPlatform()
+    while true do
+        if isFarming and not isDead then
+            if not flyingPlatform then
+                createFlyingPlatform()
+            end
+            local playerPos = HumanoidRootPart.Position
+            flyingPlatform.Position = Vector3.new(playerPos.X, playerPos.Y - 10, playerPos.Z)
+        elseif flyingPlatform then
+            flyingPlatform:Destroy()
+            flyingPlatform = nil
+        end
+        wait(0.1)
+    end
+end
+
+-- ПОИСК ОПРЕДЕЛЕННОГО ДЖОТАРО ПО КООРДИНАТАМ
+local function findSpecificJotaro()
+    local livingFolder = workspace:FindFirstChild("Living")
+    if not livingFolder then return nil end
+    
+    local allJotaros = {}
+    
+    -- Собираем всех Джотаро
+    for _, npc in pairs(livingFolder:GetChildren()) do
+        if npc.Name == "Jotaro" then
+            local humanoid = npc:FindFirstChildOfClass("Humanoid")
+            local rootPart = npc:FindFirstChild("HumanoidRootPart")
+            
+            if humanoid and humanoid.Health > 0 and rootPart then
+                table.insert(allJotaros, {
+                    model = npc,
+                    humanoid = humanoid,
+                    rootPart = rootPart,
+                    position = rootPart.Position
+                })
+            end
+        end
+    end
+    
+    if #allJotaros == 0 then
+        return nil
+    end
+    
+    -- Если только один Джотаро - берем его
+    if #allJotaros == 1 then
+        print("🎯 Найден 1 Джотаро, атакуем его")
+        return allJotaros[1]
+    end
+    
+    -- Если два Джотаро - выбираем по координатам
+    print("🔍 Найдено " .. #allJotaros .. " Джотаро, выбираем нужного...")
+    
+    -- Координаты для выбора (настрой под свои нужды)
+    local TARGET_POSITION = Vector3.new(144.6, -25.8, 588.4)
+    
+    local closestJotaro = nil
+    local closestDistance = math.huge
+    
+    for _, jotaro in pairs(allJotaros) do
+        local distance = (jotaro.position - TARGET_POSITION).Magnitude
+        print("📏 Джотаро на позиции: " .. tostring(jotaro.position) .. ", расстояние: " .. math.floor(distance))
+        
+        if distance < closestDistance then
+            closestDistance = distance
+            closestJotaro = jotaro
+        end
+    end
+    
+    if closestJotaro and closestDistance < 20 then
+        print("🎯 Выбран Джотаро на расстоянии: " .. math.floor(closestDistance))
+        return closestJotaro
+    end
+    
+    return nil
+end
+
+-- МЕДЛЕННЫЙ телепорт
+local function teleportToPosition(position)
+    if isDead or isDodging then return end
+    
+    local currentPos = HumanoidRootPart.Position
+    local targetPos = Vector3.new(position.X, position.Y + 3, position.Z)
+    local distance = (currentPos - targetPos).Magnitude
+    
+    while distance > 20 and not isDead and not isDodging do
+        local direction = (targetPos - currentPos).Unit
+        currentPos = currentPos + direction * 20
+        HumanoidRootPart.CFrame = CFrame.new(currentPos)
+        distance = (currentPos - targetPos).Magnitude
+        wait(0.3)
+    end
+    
+    if not isDead and not isDodging then
+        HumanoidRootPart.CFrame = CFrame.new(targetPos)
+    end
+end
+
+-- Функция для зажатия M1
+local function holdM1()
+    while true do
+        if isFarming and not isDead and not isDodging then
+            local holdStart = tick()
+            while tick() - holdStart < 3 and isFarming and not isDead and not isDodging do
+                RemoteEvent:FireServer("Attack", "m1")
+                wait(0.1)
+            end
+            wait(1)
+        else
+            wait(0.5)
+        end
+    end
+end
+
+-- Функция для постоянного поворота к NPC
+local function faceNPC()
+    while true do
+        if isFarming and not isDead and not isDodging and currentTarget then
+            local targetNPCData = findSpecificJotaro()
+            if targetNPCData and targetNPCData.rootPart and targetNPCData.rootPart.Parent then
+                local direction = (targetNPCData.rootPart.Position - HumanoidRootPart.Position).Unit
+                HumanoidRootPart.CFrame = CFrame.new(HumanoidRootPart.Position, HumanoidRootPart.Position + direction)
+            end
+        end
+        wait(0.1)
+    end
+end
+
+-- Проверка квеста
+local function hasJotaroQuest()
+    if TargetNPC ~= "Jotaro" then return true end
+    
+    local questPanel = LocalPlayer.PlayerGui.HUD.Main.Frames.Quest.Quests
+    for _, child in pairs(questPanel:GetChildren()) do
+        if string.find(child.Name, "Jotaro") or string.find(child.Name, "Defeat") then
+            return true
+        end
+    end
+    return false
+end
+
+-- Взятие квеста у Дио
+local function getJotaroQuest()
+    print("🔄 Берем квест у Дио...")
+    
+    local wasFarming = isFarming
+    isFarming = false
+    
+    teleportToPosition(DIO_POS)
+    
+    for i = 1, 6 do
+        if isDead then break end
+        RemoteEvent:FireServer("EndDialogue", {
+            NPC = "Dio",
+            Dialogue = "Dialogue"..i,
+            Option = "Option1"
+        })
+        wait(0.3)
+    end
+    wait(1)
+    
+    print("⏳ Ждем 20 секунд после взятия квеста...")
+    wait(15)
+    
+    isFarming = wasFarming
+    return hasJotaroQuest()
+end
+
+-- Проверка убийства через деньги
+local function waitForNPCMoney(timeout)
+    local moneyBefore = LocalPlayer.PlayerStats.Money.Value
+    local startTime = tick()
+    timeout = timeout or 5
+    
+    while tick() - startTime < timeout and not isDead and not isDodging do
+        if LocalPlayer.PlayerStats.Money.Value > moneyBefore then
+            return true
+        end
+        wait(0.1)
+    end
+    return false
+end
+
+-- Уклонение от урона С ПЛАТФОРМОЙ И ЗАЖАТИЕМ G
+local function dodgeDamage()
+    if isDodging or isDead then return end
+    
+    isDodging = true
+    print("🚨 ПОЛУЧИЛ УРОН! УКЛОНЯЮСЬ!")
+    
+    if maintainDistanceThread then
+        maintainDistanceThread:Disconnect()
+        maintainDistanceThread = nil
+    end
+    
+    local originalPos = HumanoidRootPart.Position
+    
+    -- СОЗДАЕМ ПЛАТФОРМУ ПОД НАМИ В ВОЗДУХЕ
+    local platformHeight = 25
+    local platformPos = Vector3.new(originalPos.X, originalPos.Y + platformHeight - 5, originalPos.Z)
+    createDodgePlatform(platformPos)
+    
+    -- Поднимаемся на 25 вверх и ВЫКЛЮЧАЕМ ГРАВИТАЦИЮ
+    local originalGravity = workspace.Gravity
+    workspace.Gravity = 0
+    
+    -- Телепортируемся к платформе
+    HumanoidRootPart.CFrame = CFrame.new(platformPos.X, platformPos.Y + 3, platformPos.Z)
+    
+    -- ЗАЖИМАЕМ G НА 2 СЕКУНДЫ пока стоим на платформе
+    spawn(function()
+        local gStartTime = tick()
+        while tick() - gStartTime < 2 and not isDead do
+            RemoteEvent:FireServer("InputBegan", {["Input"] = Enum.KeyCode.G})
+            wait(0.1)
+        end
+    end)
+    
+    -- Стоим на платформе 3 секунды
+    local startTime = tick()
+    while tick() - startTime < 3 and not isDead do
+        -- ДЕРЖИМ ПОЗИЦИЮ на платформе
+        HumanoidRootPart.CFrame = CFrame.new(platformPos.X, platformPos.Y + 3, platformPos.Z)
+        wait(0.1)
+    end
+    
+    -- ВКЛЮЧАЕМ ГРАВИТАЦИЮ обратно
+    workspace.Gravity = originalGravity
+    
+    -- УДАЛЯЕМ ПЛАТФОРМУ ДОДЖА
+    if dodgePlatform then
+        dodgePlatform:Destroy()
+        dodgePlatform = nil
+    end
+    
+    if not isDead then
+        -- Возвращаемся обратно на землю
+        HumanoidRootPart.CFrame = CFrame.new(originalPos.X, originalPos.Y, originalPos.Z)
+    end
+    
+    isDodging = false
+    print("🔄 Возвращаюсь к фарму")
+    
+    -- ЗАПУСКАЕМ ПОДДЕРЖАНИЕ ДИСТАНЦИИ СНОВА
+    if currentTarget and currentTarget:FindFirstChild("HumanoidRootPart") then
+        maintainDistanceThread = spawn(function() 
+            while isFarming and currentTarget and currentTarget:FindFirstChild("HumanoidRootPart") and not isDead do
+                if not isDodging then
+                    local distance = (HumanoidRootPart.Position - currentTarget.HumanoidRootPart.Position).Magnitude
+                    local ATTACK_DISTANCE = 5
+                    
+                    if distance > ATTACK_DISTANCE then
+                        local direction = (currentTarget.HumanoidRootPart.Position - HumanoidRootPart.Position).Unit
+                        local moveDistance = math.min(15, distance - ATTACK_DISTANCE)
+                        local newPosition = HumanoidRootPart.Position + direction * moveDistance
+                        newPosition = Vector3.new(newPosition.X, HumanoidRootPart.Position.Y, newPosition.Z)
+                        HumanoidRootPart.CFrame = CFrame.new(newPosition)
+                    end
+                end
+                wait(2)
+            end
+        end)
+    end
+end
+
+-- Мониторинг урона
+spawn(function()
+    while true do
+        if isFarming and not isDead then
+            if Humanoid.Health < lastHealth then
+                lastHealth = Humanoid.Health
+                dodgeDamage()
+            end
+            lastHealth = Humanoid.Health
+        end
+        wait(0.05)
+    end
+end)
+
+-- Мониторинг квеста
+spawn(function()
+    while true do
+        if isFarming and not isDead and TargetNPC == "Jotaro" then
+            if not hasJotaroQuest() then
+                print("❌ Квест пропал! Берем квест...")
+                currentTarget = nil
+                getJotaroQuest()
+            end
+        end
+        wait(2)
+    end
+end)
+
+-- Запускаем зажатие M1
+spawn(holdM1)
+
+-- Запускаем постоянный поворот к NPC
+spawn(faceNPC)
+
+-- Авто-стенд
+spawn(function()
+    while true do
+        if isFarming and Character:FindFirstChild("SummonedStand") and not Character.SummonedStand.Value and not isDead and not isDodging then
+            RemoteEvent:FireServer("ToggleStand", "Toggle")
+        end
+        wait(1)
+    end
+end)
+
+-- Нажатие R
+spawn(function()
+    while true do
+        if isFarming and not isDead and not isDodging then
+            RemoteEvent:FireServer("InputBegan", {["Input"] = Enum.KeyCode.R})
+        end
+        wait(2)
+    end
+end)
+
+-- Нажатие Y каждые 1 секунду
+spawn(function()
+    while true do
+        if isFarming and not isDead and not isDodging then
+            RemoteEvent:FireServer("InputBegan", {["Input"] = Enum.KeyCode.Y})
+        end
+        wait(1)
+    end
+end)
+
+-- Зажатие G на 3 секунды раз в 30 секунд
+spawn(function()
+    while true do
+        if isFarming and not isDead and not isDodging then
+            local holdStart = tick()
+            while tick() - holdStart < 3 and isFarming and not isDead and not isDodging do
+                RemoteEvent:FireServer("InputBegan", {["Input"] = Enum.KeyCode.G})
+                wait(0.1)
+            end
+            wait(30) -- Ждем 30 секунд перед следующим зажатием
+        else
+            wait(1)
+        end
+    end
+end)
+
+-- Правая кнопка мыши 3 раза раз в 5 секунд
+spawn(function()
+    while true do
+        if isFarming and not isDead and not isDodging then
+            for i = 1, 3 do
+                RemoteEvent:FireServer("Attack", "m2")
+                wait(0.2)
+            end
+            wait(5)
+        else
+            wait(1)
+        end
+    end
+end)
+
+-- Функция фарма определенного Джотаро
+local function farmSpecificJotaro()
+    local targetNPCData = findSpecificJotaro()
+    
+    if targetNPCData and not isDead then
+        if currentTarget ~= targetNPCData.model then
+            currentTarget = targetNPCData.model
+            print("🎯 Найден нужный Джотаро, телепортируемся...")
+            
+            teleportToPosition(targetNPCData.rootPart.Position)
+            
+            -- Запускаем поддержание дистанции
+            maintainDistanceThread = spawn(function() 
+                while isFarming and currentTarget and currentTarget:FindFirstChild("HumanoidRootPart") and not isDead do
+                    if not isDodging then
+                        local distance = (HumanoidRootPart.Position - currentTarget.HumanoidRootPart.Position).Magnitude
+                        local ATTACK_DISTANCE = 5
+                        
+                        if distance > ATTACK_DISTANCE then
+                            local direction = (currentTarget.HumanoidRootPart.Position - HumanoidRootPart.Position).Unit
+                            local moveDistance = math.min(15, distance - ATTACK_DISTANCE)
+                            local newPosition = HumanoidRootPart.Position + direction * moveDistance
+                            newPosition = Vector3.new(newPosition.X, HumanoidRootPart.Position.Y, newPosition.Z)
+                            HumanoidRootPart.CFrame = CFrame.new(newPosition)
+                        end
+                    end
+                    wait(2)
+                end
+            end)
+        end
+        
+        while targetNPCData.humanoid and targetNPCData.humanoid.Health > 0 and isFarming and not isDead do
+            if waitForNPCMoney(0.5) then
+                print("💰 Нужный Джотаро убит!")
+                currentTarget = nil
+                return true
+            end
+            
+            if not targetNPCData.humanoid or targetNPCData.humanoid.Health <= 0 or not targetNPCData.model.Parent then
+                currentTarget = nil
+                return false
+            end
+            
+            wait(0.1)
+        end
+    else
+        currentTarget = nil
+    end
+    return false
+end
+
+-- Восстановление после смерти
+local function handleRespawn()
+    while true do
+        if not Character or not HumanoidRootPart or not HumanoidRootPart.Parent then
+            isDead = true
+            print("💀 Умер! Ждем возрождения...")
+            
+            -- Удаляем платформы при смерти
+            if flyingPlatform then
+                flyingPlatform:Destroy()
+                flyingPlatform = nil
+            end
+            if dodgePlatform then
+                dodgePlatform:Destroy()
+                dodgePlatform = nil
+            end
+            
+            repeat
+                wait(1)
+            until LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            
+            Character = LocalPlayer.Character
+            HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+            Humanoid = Character:WaitForChild("Humanoid")
+            RemoteEvent = Character:WaitForChild("RemoteEvent")
+            
+            isDead = false
+            lastHealth = Humanoid.Health
+            currentTarget = nil
+            
+            print("🔄 Возродился! Летим обратно к Джотаро...")
+            
+            if isFarming then
+                local targetNPCData = findSpecificJotaro()
+                if targetNPCData then
+                    teleportToPosition(targetNPCData.rootPart.Position)
+                    print("🎯 Вернулись к нужному Джотаро!")
+                else
+                    print("⏳ Нужный Джотаро не найден, ждем...")
+                end
+            end
+        end
+        wait(1)
+    end
+end
+
+-- Основной цикл фарма
+local function farmNPC()
+    spawn(handleRespawn)
+    
+    while true do
+        if TargetNPC == "Jotaro" and not hasJotaroQuest() and not isDead then
+            local questTaken = getJotaroQuest()
+            if not questTaken then
+                print("❌ Не удалось взять квест, пробуем еще раз...")
+                wait(5)
+                continue
+            end
+        end
+        
+        if not isDead then
+            isFarming = true
+            lastHealth = Humanoid.Health
+            currentTarget = nil
+            
+            local jotaroKilled = false
+            while not jotaroKilled and isFarming and not isDead do
+                jotaroKilled = farmSpecificJotaro()
+                
+                if not jotaroKilled and not isDead then
+                    print("⏳ Ожидание респавна нужного Джотаро...")
+                    wait(2)
+                end
+            end
+            
+            isFarming = false
+            
+            if jotaroKilled and TargetNPC == "Jotaro" then
+                print("🔍 Проверяем квест после убийства...")
+                wait(2)
+            end
+            
+            wait(2)
+        else
+            wait(1)
+        end
+    end
+end
+
+-- Постоянный поворот к Джотаро
+spawn(function()
+    while true do
+        if isFarming and not isDead and not isDodging then
+            local targetNPCData = findSpecificJotaro()
+            if targetNPCData and targetNPCData.rootPart then
+                local pos = targetNPCData.rootPart.Position
+                HumanoidRootPart.CFrame = CFrame.new(HumanoidRootPart.Position, Vector3.new(pos.X, HumanoidRootPart.Position.Y, pos.Z))
+            end
+        end
+        wait(0.5)
+    end
+end)
+
+-- Запускаем летающую платформу
+spawn(updateFlyingPlatform)
+
+-- Запускаем фарм
+farmNPC()
