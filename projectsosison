@@ -1,0 +1,529 @@
+-- Project Sosison - Скрипт телепортации с перемещаемым GUI
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local enabled = false
+local targetPlayerName = ""
+local ignorePlayerName = ""
+local teleportAll = true
+
+-- Настройки скорости
+local originalWalkSpeed = 16
+local originalJumpPower = 50
+local customWalkSpeed = 16
+local customJumpPower = 50
+local moveDirection = Vector3.new(0, 0, 0)
+local speedApplied = false
+local lastInputTime = 0
+
+print("🚀 Project Sosison - Скрипт телепортации загружен!")
+
+-- Функция для проверки что игрок не в чате
+local function isPlayerTyping()
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if playerGui then
+        local chatBar = playerGui:FindFirstChild("Chat") 
+        if chatBar then
+            local chatFrame = chatBar:FindFirstChild("Frame")
+            if chatFrame then
+                local chatBox = chatFrame:FindFirstChild("ChatBar")
+                if chatBox and chatBox:IsA("TextBox") then
+                    return chatBox:IsFocused()
+                end
+            end
+        end
+    end
+    return false
+end
+
+-- Функция плотной телепортации в игрока
+local function ultraDenseTeleport()
+    if not enabled then return end
+    
+    local myChar = player.Character
+    if not myChar then return end
+    
+    local myHRP = myChar:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return end
+    
+    local myPos = myHRP.Position
+    
+    if teleportAll then
+        for _, otherPlayer in pairs(Players:GetPlayers()) do
+            if otherPlayer ~= player then
+                if ignorePlayerName ~= "" then
+                    local shouldIgnore = string.lower(otherPlayer.Name) == string.lower(ignorePlayerName) or 
+                                       string.lower(otherPlayer.DisplayName) == string.lower(ignorePlayerName)
+                    if shouldIgnore then
+                        continue
+                    end
+                end
+                
+                local otherChar = otherPlayer.Character
+                if otherChar then
+                    local otherHRP = otherChar:FindFirstChild("HumanoidRootPart")
+                    if otherHRP then
+                        local offset = Vector3.new(math.random(-1, 1), 0, math.random(-1, 1))
+                        otherHRP.CFrame = CFrame.new(myPos + offset)
+                    end
+                end
+            end
+        end
+    else
+        if targetPlayerName ~= "" then
+            local playersToTeleport = {}
+            
+            for name in string.gmatch(targetPlayerName, "[^,]+") do
+                local trimmedName = string.gsub(name, "^%s*(.-)%s*$", "%1")
+                if trimmedName ~= "" then
+                    table.insert(playersToTeleport, trimmedName)
+                end
+            end
+            
+            for _, targetName in ipairs(playersToTeleport) do
+                for _, otherPlayer in pairs(Players:GetPlayers()) do
+                    if otherPlayer ~= player then
+                        if string.lower(otherPlayer.Name) == string.lower(targetName) or 
+                           string.lower(otherPlayer.DisplayName) == string.lower(targetName) then
+                            local otherChar = otherPlayer.Character
+                            if otherChar then
+                                local otherHRP = otherChar:FindFirstChild("HumanoidRootPart")
+                                if otherHRP then
+                                    local offset = Vector3.new(math.random(-1, 1), 0, math.random(-1, 1))
+                                    otherHRP.CFrame = CFrame.new(myPos + offset)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Функция управления скоростью (ПОФИКШЕНО - не бежит сам)
+local function updateSpeedSystem()
+    if not speedApplied then return end
+    if isPlayerTyping() then return end
+    
+    local char = player.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    
+    local hrp = char.HumanoidRootPart
+    
+    -- Полностью удаляем старый BodyVelocity
+    local oldBv = hrp:FindFirstChild("RePozSpeed")
+    if oldBv then
+        oldBv:Destroy()
+    end
+    
+    -- Создаем новый ТОЛЬКО если есть активное движение
+    if moveDirection.Magnitude > 0 then
+        local newBv = Instance.new("BodyVelocity")
+        newBv.Name = "RePozSpeed"
+        
+        local camera = workspace.CurrentCamera
+        local cameraCFrame = camera.CFrame
+        
+        local right = cameraCFrame.RightVector * moveDirection.X
+        local forward = cameraCFrame.LookVector * -moveDirection.Z
+        local worldDirection = (right + forward) * customWalkSpeed
+        
+        worldDirection = Vector3.new(worldDirection.X, 0, worldDirection.Z)
+        
+        newBv.Velocity = worldDirection
+        newBv.MaxForce = Vector3.new(40000, 0, 40000)
+        newBv.Parent = hrp
+    end
+end
+
+-- BodyVelocity метод для прыжка (ОБНОВЛЯЕТСЯ КАЖДЫЕ 1.5 СЕКУНДЫ)
+local jumpCooldown = false
+local lastJumpUpdate = 0
+local function updateJumpSystem()
+    if not speedApplied then return end
+    
+    local currentTime = tick()
+    if currentTime - lastJumpUpdate < 1.5 then return end
+    
+    local character = player.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local hrp = character.HumanoidRootPart
+    
+    if humanoid and humanoid:GetState() == Enum.HumanoidStateType.Jumping then
+        -- КД чтобы не улетать в небо
+        jumpCooldown = true
+        
+        local existingBv = hrp:FindFirstChild("RePozJump")
+        if not existingBv then
+            local bv = Instance.new("BodyVelocity")
+            bv.Name = "RePozJump"
+            bv.Velocity = Vector3.new(0, customJumpPower, 0)
+            bv.MaxForce = Vector3.new(0, 50000, 0)
+            bv.Parent = hrp
+            
+            -- Удаляем через короткое время
+            delay(0.2, function()
+                if bv and bv.Parent then
+                    bv:Destroy()
+                end
+            end)
+        end
+        
+        -- Обновляем время последнего обновления прыжка
+        lastJumpUpdate = currentTime
+        
+        -- Сбрасываем КД через 0.5 сек
+        delay(0.5, function()
+            jumpCooldown = false
+        end)
+    end
+end
+
+-- Отслеживаем движение (ПЕРЕПИСАНО)
+local function handleInput(input, isBegan)
+    if isPlayerTyping() then return end
+    
+    local key = input.KeyCode
+    local direction = Vector3.new(0, 0, 0)
+    
+    if key == Enum.KeyCode.W then
+        direction = Vector3.new(0, 0, -1)
+    elseif key == Enum.KeyCode.S then
+        direction = Vector3.new(0, 0, 1)
+    elseif key == Enum.KeyCode.A then
+        direction = Vector3.new(-1, 0, 0)
+    elseif key == Enum.KeyCode.D then
+        direction = Vector3.new(1, 0, 0)
+    else
+        return
+    end
+    
+    if isBegan then
+        moveDirection = moveDirection + direction
+        lastInputTime = tick()
+    else
+        moveDirection = moveDirection - direction
+        -- Немедленно очищаем скорость при отпускании клавиши
+        local char = player.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            local bv = char.HumanoidRootPart:FindFirstChild("RePozSpeed")
+            if bv then
+                bv:Destroy()
+            end
+        end
+    end
+end
+
+UserInputService.InputBegan:Connect(function(input)
+    handleInput(input, true)
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    handleInput(input, false)
+end)
+
+-- Дополнительная защита: очистка скорости если нет ввода
+RunService.Heartbeat:Connect(function()
+    if tick() - lastInputTime > 0.1 and moveDirection.Magnitude == 0 then
+        local char = player.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            local bv = char.HumanoidRootPart:FindFirstChild("RePozSpeed")
+            if bv then
+                bv:Destroy()
+            end
+        end
+    end
+end)
+
+-- ========== СОЗДАНИЕ GUI ==========
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "ProjectSosisonGUI"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 350, 0, 250)
+mainFrame.Position = UDim2.new(0, 10, 0, 10)
+mainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.ZIndex = 1
+mainFrame.Parent = screenGui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 8)
+corner.Parent = mainFrame
+
+-- Заголовок
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 30)
+titleBar.Position = UDim2.new(0, 0, 0, 0)
+titleBar.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+titleBar.ZIndex = 2
+titleBar.Parent = mainFrame
+
+local titleText = Instance.new("TextLabel")
+titleText.Size = UDim2.new(0.7, 0, 1, 0)
+titleText.Position = UDim2.new(0, 5, 0, 0)
+titleText.BackgroundTransparency = 1
+titleText.Text = "🔧 Project Sosison"
+titleText.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleText.Font = Enum.Font.GothamBold
+titleText.TextSize = 14
+titleText.TextXAlignment = Enum.TextXAlignment.Left
+titleText.ZIndex = 3
+titleText.Parent = titleBar
+
+-- Кнопка закрытия
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.new(0, 20, 0, 20)
+closeButton.Position = UDim2.new(1, -25, 0, 5)
+closeButton.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
+closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeButton.Font = Enum.Font.GothamBold
+closeButton.TextSize = 12
+closeButton.Text = "X"
+closeButton.ZIndex = 3
+closeButton.Parent = titleBar
+
+-- Вкладки
+local tabsFrame = Instance.new("Frame")
+tabsFrame.Size = UDim2.new(1, 0, 0, 25)
+tabsFrame.Position = UDim2.new(0, 0, 0, 30)
+tabsFrame.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+tabsFrame.BorderSizePixel = 0
+tabsFrame.ZIndex = 2
+tabsFrame.Parent = mainFrame
+
+local teleportTab = Instance.new("TextButton")
+teleportTab.Size = UDim2.new(0.5, 0, 1, 0)
+teleportTab.Position = UDim2.new(0, 0, 0, 0)
+teleportTab.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+teleportTab.TextColor3 = Color3.fromRGB(255, 255, 255)
+teleportTab.Font = Enum.Font.GothamBold
+teleportTab.TextSize = 11
+teleportTab.Text = "📡 Телепорт"
+teleportTab.ZIndex = 3
+teleportTab.Parent = tabsFrame
+
+local speedTab = Instance.new("TextButton")
+speedTab.Size = UDim2.new(0.5, 0, 1, 0)
+speedTab.Position = UDim2.new(0.5, 0, 0, 0)
+speedTab.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+speedTab.TextColor3 = Color3.fromRGB(200, 200, 200)
+speedTab.Font = Enum.Font.GothamBold
+speedTab.TextSize = 11
+speedTab.Text = "⚡ Скорость"
+speedTab.ZIndex = 3
+speedTab.Parent = tabsFrame
+
+-- Контент телепорта
+local teleportContent = Instance.new("Frame")
+teleportContent.Size = UDim2.new(1, 0, 1, -55)
+teleportContent.Position = UDim2.new(0, 0, 0, 55)
+teleportContent.BackgroundTransparency = 1
+teleportContent.Visible = true
+teleportContent.ZIndex = 2
+teleportContent.Parent = mainFrame
+
+-- Контент скорости
+local speedContent = Instance.new("Frame")
+speedContent.Size = UDim2.new(1, 0, 1, -55)
+speedContent.Position = UDim2.new(0, 0, 0, 55)
+speedContent.BackgroundTransparency = 1
+speedContent.Visible = false
+speedContent.ZIndex = 2
+speedContent.Parent = mainFrame
+
+-- === ТЕЛЕПОРТ ВКЛАДКА ===
+local searchBox = Instance.new("TextBox")
+searchBox.Size = UDim2.new(0.8, 0, 0, 20)
+searchBox.Position = UDim2.new(0.1, 0, 0.1, 0)
+searchBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+searchBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+searchBox.Font = Enum.Font.Gotham
+searchBox.TextSize = 10
+searchBox.PlaceholderText = "Ник цели (через запятую)"
+searchBox.ZIndex = 2
+searchBox.Parent = teleportContent
+
+local ignoreBox = Instance.new("TextBox")
+ignoreBox.Size = UDim2.new(0.8, 0, 0, 20)
+ignoreBox.Position = UDim2.new(0.1, 0, 0.25, 0)
+ignoreBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+ignoreBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+ignoreBox.Font = Enum.Font.Gotham
+ignoreBox.TextSize = 10
+ignoreBox.PlaceholderText = "Не телепортировать (через запятую)"
+ignoreBox.ZIndex = 2
+ignoreBox.Parent = teleportContent
+
+local button = Instance.new("TextButton")
+button.Size = UDim2.new(0.8, 0, 0, 35)
+button.Position = UDim2.new(0.1, 0, 0.45, 0)
+button.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+button.Text = "ВКЛ Телепорт ВСЕХ"
+button.TextColor3 = Color3.fromRGB(255, 255, 255)
+button.Font = Enum.Font.GothamBold
+button.TextSize = 12
+button.ZIndex = 2
+button.Parent = teleportContent
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(0.8, 0, 0, 20)
+statusLabel.Position = UDim2.new(0.1, 0, 0.65, 0)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Режим: Все игроки"
+statusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextSize = 9
+statusLabel.ZIndex = 2
+statusLabel.Parent = teleportContent
+
+-- === СКОРОСТЬ ВКЛАДКА ===
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Size = UDim2.new(0.8, 0, 0, 20)
+speedLabel.Position = UDim2.new(0.1, 0, 0.1, 0)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Text = "Скорость бега: " .. originalWalkSpeed
+speedLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+speedLabel.Font = Enum.Font.Gotham
+speedLabel.TextSize = 12
+speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+speedLabel.ZIndex = 2
+speedLabel.Parent = speedContent
+
+local speedBox = Instance.new("TextBox")
+speedBox.Size = UDim2.new(0.6, 0, 0, 20)
+speedBox.Position = UDim2.new(0.1, 0, 0.2, 0)
+speedBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+speedBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+speedBox.Font = Enum.Font.Gotham
+speedBox.TextSize = 12
+speedBox.Text = tostring(originalWalkSpeed)
+speedBox.PlaceholderText = "Скорость"
+speedBox.ZIndex = 2
+speedBox.Parent = speedContent
+
+local jumpLabel = Instance.new("TextLabel")
+jumpLabel.Size = UDim2.new(0.8, 0, 0, 20)
+jumpLabel.Position = UDim2.new(0.1, 0, 0.35, 0)
+jumpLabel.BackgroundTransparency = 1
+jumpLabel.Text = "Высота прыжка: " .. customJumpPower
+jumpLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+jumpLabel.Font = Enum.Font.Gotham
+jumpLabel.TextSize = 12
+jumpLabel.TextXAlignment = Enum.TextXAlignment.Left
+jumpLabel.ZIndex = 2
+jumpLabel.Parent = speedContent
+
+local jumpBox = Instance.new("TextBox")
+jumpBox.Size = UDim2.new(0.6, 0, 0, 20)
+jumpBox.Position = UDim2.new(0.1, 0, 0.45, 0)
+jumpBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+jumpBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+jumpBox.Font = Enum.Font.Gotham
+jumpBox.TextSize = 12
+jumpBox.Text = tostring(customJumpPower)
+jumpBox.PlaceholderText = "Прыжок"
+jumpBox.ZIndex = 2
+jumpBox.Parent = speedContent
+
+local applySpeedButton = Instance.new("TextButton")
+applySpeedButton.Size = UDim2.new(0.8, 0, 0, 25)
+applySpeedButton.Position = UDim2.new(0.1, 0, 0.75, 0)
+applySpeedButton.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+applySpeedButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+applySpeedButton.Font = Enum.Font.GothamBold
+applySpeedButton.TextSize = 11
+applySpeedButton.Text = "Применить настройки"
+applySpeedButton.ZIndex = 2
+applySpeedButton.Parent = speedContent
+
+-- Обработчики
+searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+    if searchBox.Text == "" then
+        teleportAll = true
+        targetPlayerName = ""
+        button.Text = "ВКЛ Телепорт ВСЕХ"
+    else
+        teleportAll = false
+        targetPlayerName = searchBox.Text
+        button.Text = "ВКЛ Телепорт ВЫБРАННЫХ"
+    end
+    statusLabel.Text = "Цель: " .. (targetPlayerName == "" and "Все" or targetPlayerName)
+end)
+
+ignoreBox:GetPropertyChangedSignal("Text"):Connect(function()
+    ignorePlayerName = ignoreBox.Text
+end)
+
+button.MouseButton1Click:Connect(function()
+    enabled = not enabled
+    if enabled then
+        button.Text = "ВЫКЛ Телепорт " .. (teleportAll and "ВСЕХ" or "ВЫБРАННЫХ")
+        button.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
+    else
+        button.Text = "ВКЛ Телепорт " .. (teleportAll and "ВСЕХ" or "ВЫБРАННЫХ")
+        button.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+    end
+end)
+
+-- Обработчики вкладок
+teleportTab.MouseButton1Click:Connect(function()
+    teleportContent.Visible = true
+    speedContent.Visible = false
+    teleportTab.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+    speedTab.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+end)
+
+speedTab.MouseButton1Click:Connect(function()
+    teleportContent.Visible = false
+    speedContent.Visible = true
+    teleportTab.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    speedTab.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+end)
+
+applySpeedButton.MouseButton1Click:Connect(function()
+    local newSpeed = tonumber(speedBox.Text)
+    local newJump = tonumber(jumpBox.Text)
+    
+    if newSpeed then
+        customWalkSpeed = newSpeed
+        speedLabel.Text = "Скорость бега: " .. newSpeed
+    end
+    
+    if newJump then
+        customJumpPower = newJump
+        jumpLabel.Text = "Высота прыжка: " .. newJump
+    end
+    
+    speedApplied = true
+    print("✅ Настройки применены! Скорость: " .. (newSpeed or customWalkSpeed) .. ", Прыжок: " .. (newJump or customJumpPower))
+end)
+
+closeButton.MouseButton1Click:Connect(function()
+    screenGui:Destroy()
+    enabled = false
+    print("❌ Project Sosison GUI закрыт")
+end)
+
+-- Добавляем GUI в игрока
+screenGui.Parent = player.PlayerGui
+
+-- Циклы обновления
+RunService.Heartbeat:Connect(function()
+    ultraDenseTeleport()
+    updateSpeedSystem()
+    updateJumpSystem() -- ДОБАВЛЕНО ОБНОВЛЕНИЕ ПРЫЖКА
+end)
+
+print("✅ Project Sosison загружен!")
+print("🔧 Баг со скоростью пофикшен!")
+print("🔄 Высота прыжка обновляется каждые 1.5 секунды")
