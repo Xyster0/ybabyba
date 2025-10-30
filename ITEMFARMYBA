@@ -1,0 +1,311 @@
+local PlayerGui = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+local LocalPlayer = game.Players.LocalPlayer
+local Character = LocalPlayer.Character
+repeat task.wait() until Character:FindFirstChild("RemoteEvent") and Character:FindFirstChild("RemoteFunction")
+local RemoteFunction, RemoteEvent = Character.RemoteFunction, Character.RemoteEvent
+local HRP = Character.PrimaryPart
+
+-- СОЗДАЕМ ПЛАТФОРМУ ПОД НОГАМИ
+local platform = Instance.new("Part")
+platform.Name = "AntiFallPlatform"
+platform.Size = Vector3.new(10, 1, 10)
+platform.Anchored = true
+platform.CanCollide = true
+platform.Transparency = 1
+platform.Parent = workspace
+
+-- ФУНКЦИЯ ОБНОВЛЕНИЯ ПЛАТФОРМЫ
+local function updatePlatform()
+    while true do
+        if Character and HRP then
+            platform.CFrame = CFrame.new(HRP.Position.X, HRP.Position.Y - 5, HRP.Position.Z)
+        end
+        task.wait(0.1)
+    end
+end
+
+task.spawn(updatePlatform)
+
+-- АНТИ-АФК
+local function antiAFK()
+    while true do
+        task.wait(30) -- Каждые 30 секунд
+        local VirtualUser = game:GetService("VirtualUser")
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
+    end
+end
+
+task.spawn(antiAFK)
+
+-- НАСТРОЙКИ
+getgenv().waitUntilCollect = 0.3
+getgenv().teleportDistance = 15
+getgenv().teleportDelay = 0.05
+
+-- ФУНКЦИЯ ДЛЯ ПОИСКА ВСЕХ ПРЕДМЕТОВ НА КАРТЕ С СОРТИРОВКОЙ ПО БЛИЗОСТИ
+local function findItem(itemName)
+    local ItemsDict = {
+        ["Position"] = {},
+        ["ProximityPrompt"] = {},
+        ["Items"] = {}
+    }
+    
+    local tempItems = {}
+    
+    for _,item in pairs(game:GetService("Workspace")["Item_Spawns"].Items:GetChildren()) do
+        if item:FindFirstChild("MeshPart") and item.ProximityPrompt then
+            if item.ProximityPrompt.ObjectText == itemName then
+                if item.ProximityPrompt.MaxActivationDistance == 8 then
+                    table.insert(tempItems, {
+                        Position = item.MeshPart.CFrame,
+                        Prompt = item.ProximityPrompt,
+                        Distance = (HRP.Position - item.MeshPart.Position).Magnitude
+                    })
+                end
+            end
+        end
+    end
+    
+    table.sort(tempItems, function(a, b)
+        return a.Distance < b.Distance
+    end)
+    
+    for _, item in ipairs(tempItems) do
+        table.insert(ItemsDict["Items"], itemName)
+        table.insert(ItemsDict["ProximityPrompt"], item.Prompt)
+        table.insert(ItemsDict["Position"], item.Position)
+    end
+    
+    return ItemsDict
+end
+
+-- ФУНКЦИЯ ДЛЯ ПОДСЧЕТА КОЛИЧЕСТВА ПРЕДМЕТОВ В ИНВЕНТАРЕ
+local function countItems(itemName)
+    local itemAmount = 0
+    for _,item in pairs(game.Players.LocalPlayer.Backpack:GetChildren()) do
+        if item.Name == itemName then
+            itemAmount += 1
+        end
+    end
+    return itemAmount
+end
+
+-- ФУНКЦИЯ ФОКУСИРОВКИ КАМЕРЫ НА ПРЕДМЕТЕ
+local function focusCameraOnItem(itemPosition)
+    if not Character:FindFirstChild("FocusCam") then
+        local FocusCam = Instance.new("ObjectValue")
+        FocusCam.Name = "FocusCam"
+        FocusCam.Parent = Character
+    end
+    
+    -- Создаем временную часть для фокуса камеры
+    local focusPart = Instance.new("Part")
+    focusPart.Anchored = true
+    focusPart.CanCollide = false
+    focusPart.Transparency = 1
+    focusPart.Size = Vector3.new(1, 1, 1)
+    focusPart.CFrame = itemPosition
+    focusPart.Parent = workspace
+    
+    Character.FocusCam.Value = focusPart
+    
+    -- Удаляем через 2 секунды
+    task.wait(2)
+    if focusPart then
+        focusPart:Destroy()
+    end
+end
+
+-- ФУНКЦИЯ ПРОДАЖИ ПРЕДМЕТОВ КОТОРЫХ БОЛЬШЕ 9+
+local function sellItemsIfOver9()
+    local itemsToSell = {
+        "Ancient Scroll",
+        "Caesar's Headband",
+        "Clackers",
+        "Diamond",
+        "Dio's Diary",
+        "Gold Coin",
+        "Mysterious Arrow",
+        "Pure Rokakaka",
+        "Quinton's Glove",
+        "Rib Cage of The Saint's Corpse",
+        "Rokakaka",   
+        "Steel Ball",
+        "Zeppeli's Hat",
+        "Stone Mask"
+    }
+    
+    local doNotSell = {
+        "Lucky Arrow",
+        "Lucky Stone Mask"
+    }
+    
+    local soldSomething = false
+    
+    for _, itemName in pairs(itemsToSell) do
+        if not table.find(doNotSell, itemName) then
+            if countItems(itemName) >= 9 then
+                local item = LocalPlayer.Backpack:FindFirstChild(itemName)
+                if item then
+                    LocalPlayer.Character.Humanoid:EquipTool(item)
+                    task.wait(0.3)
+                    local dialogueToEnd = {
+                        ["NPC"] = "Merchant",
+                        ["Dialogue"] = "Dialogue5",
+                        ["Option"] = "Option2"
+                    }
+                    RemoteEvent:FireServer("EndDialogue", dialogueToEnd)
+                    task.wait(0.3)
+                    soldSomething = true
+                end
+            end
+        end
+    end
+    
+    return soldSomething
+end
+
+-- ТЕЛЕПОРТЫ ПО 15 СТАДОВ СО СКОРОСТЬЮ 0.05
+local function fastTeleportToItem(targetCFrame)
+    local startPos = HRP.Position
+    local targetPos = targetCFrame.Position
+    local distance = (targetPos - startPos).Magnitude
+    
+    local steps = math.ceil(distance / getgenv().teleportDistance)
+    for i = 1, steps do
+        if not Character or not HRP then break end
+        local lerpPos = startPos:Lerp(targetPos, i/steps)
+        HRP.CFrame = CFrame.new(lerpPos.X, lerpPos.Y + 5, lerpPos.Z)
+        platform.CFrame = CFrame.new(HRP.Position.X, HRP.Position.Y - 5, HRP.Position.Z)
+        if i < steps then
+            task.wait(getgenv().teleportDelay)
+        end
+    end
+end
+
+-- ОСНОВНАЯ ФУНКЦИЯ СБОРА ПРЕДМЕТА
+local function getitem(item, itemIndex)
+    local gotItem = false
+    local startTime = tick()
+
+    if Character:FindFirstChild("SummonedStand") then
+        if Character:FindFirstChild("SummonedStand").Value then
+            RemoteFunction:InvokeServer("ToggleStand", "Toggle")
+        end
+    end
+
+    -- Фокусируем камеру на предмете
+    focusCameraOnItem(item["Position"][itemIndex])
+
+    local connection
+    connection = LocalPlayer.Backpack.ChildAdded:Connect(function(child)
+        if child.Name == item["Items"][1] then
+            gotItem = true
+            if connection then connection:Disconnect() end
+        end
+    end)
+    
+    fastTeleportToItem(item["Position"][itemIndex])
+
+    task.wait(getgenv().waitUntilCollect)
+
+    fireproximityprompt(item["ProximityPrompt"][itemIndex])
+    
+    local screenGui = LocalPlayer.PlayerGui:WaitForChild("ScreenGui", 1)
+    
+    if screenGui then
+        local screenGuiPart = screenGui:WaitForChild("Part", 1)
+        if screenGuiPart then
+            for _, button in pairs(screenGuiPart:GetDescendants()) do
+                if button:FindFirstChild("Part") then
+                    if button:IsA("ImageButton") and button:WaitForChild("Part").TextColor3 == Color3.new(0, 1, 0) then
+                        local clickTime = tick()
+                        repeat
+                            firesignal(button.MouseButton1Click)
+                            task.wait(0.1)
+                            if tick() - clickTime > 2 then
+                                break
+                            end
+                        until not LocalPlayer.PlayerGui:FindFirstChild("ScreenGui") or gotItem
+                        break
+                    end
+                end
+            end
+        end
+    end
+    
+    while not gotItem and (tick() - startTime) < 2 do
+        task.wait(0.1)
+    end
+    
+    if connection then connection:Disconnect() end
+    
+    return gotItem
+end
+
+-- ФУНКЦИЯ ФАРМА КОНКРЕТНОГО ПРЕДМЕТА
+local function farmItem(itemName)
+    local items = findItem(itemName)
+    
+    if #items["Position"] == 0 then
+        return false
+    end
+
+    for itemIndex, _ in pairs(items["Position"]) do
+        getitem(items, itemIndex)
+        task.wait(0.2)
+    end
+    
+    return true
+end
+
+-- ВСЕ ПРЕДМЕТЫ ДЛЯ ФАРМА
+local allItems = {
+    "Ancient Scroll",
+    "Blue Candy",
+    "Caesar's Headband", 
+    "Clackers",
+    "Diamond",
+    "Dio's Diary",
+    "Gold Coin",
+    "Green Candy",
+    "Heart of The Saint's Corpse",
+    "Koichi's Suitcase",
+    "Left Arm of The Saint's Corpse",
+    "Lighter",
+    "Mysterious Arrow",
+    "Pelvis of The Saint's Corpse",
+    "Pure Rokakaka", 
+    "Quinton's Glove",
+    "Red Candy",
+    "Rib Cage of The Saint's Corpse",
+    "Rokakaka",
+    "Stand Arrow",
+    "Steel Ball",
+    "Yellow Candy",
+    "Zeppeli's Hat",
+    "Lucky Arrow",
+    "Stone Mask",
+    "Lucky Stone Mask"
+}
+
+-- ОСНОВНОЙ ЦИКЛ ФАРМА
+task.wait(2)
+
+while true do
+    if not Character or not Character.Parent then
+        Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+        repeat task.wait() until Character:FindFirstChild("RemoteEvent") and Character:FindFirstChild("RemoteFunction")
+        RemoteFunction, RemoteEvent = Character.RemoteFunction, Character.RemoteEvent
+        HRP = Character.PrimaryPart
+    end
+    
+    for _, itemName in pairs(allItems) do
+        farmItem(itemName)
+    end
+    
+    sellItemsIfOver9()
+    
+    task.wait(0.3)
+end
