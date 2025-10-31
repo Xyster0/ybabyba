@@ -23,11 +23,6 @@ local lastInputTime = 0
 
 print("Project Sosison загружен")
 
--- Надежная проверка фокуса чата
-local function isPlayerTyping()
-    return UserInputService:GetFocusedTextBox() ~= nil
-end
-
 -- Функция сброса движения
 local function resetMovement()
     moveDirection = Vector3.new(0, 0, 0)
@@ -50,48 +45,102 @@ UserInputService.WindowFocused:Connect(function()
     resetMovement()
 end)
 
--- Функция для применения ESP к конкретному игроку
-local espHighlights = {}
-local function applyESPToPlayer(otherPlayer)
-    if not espEnabled then return end
-    if otherPlayer == player then return end
-    if not otherPlayer.Character then return end
+-- Функция автоподбора ника
+local function autoCompletePlayerName(textBox)
+    local currentText = textBox.Text
     
-    local shouldESP = espTarget == "" or 
-                    string.lower(otherPlayer.Name) == string.lower(espTarget) or 
-                    string.lower(otherPlayer.DisplayName) == string.lower(espTarget)
-    
-    if shouldESP then
-        if not espHighlights[otherPlayer] then
-            local highlight = Instance.new("Highlight")
-            highlight.Name = "SosisonESP"
-            highlight.FillTransparency = 1  -- Полностью прозрачная заливка
-            highlight.OutlineColor = Color3.fromRGB(255, 0, 0)  -- Красная обводка
-            highlight.OutlineTransparency = 0
-            highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            highlight.Parent = otherPlayer.Character
-            espHighlights[otherPlayer] = highlight
+    if currentText ~= "" then
+        -- Ищем игроков по частичному совпадению
+        local foundPlayers = {}
+        
+        for _, otherPlayer in pairs(Players:GetPlayers()) do
+            if otherPlayer ~= player then
+                local nameLower = string.lower(otherPlayer.Name)
+                local displayLower = string.lower(otherPlayer.DisplayName)
+                local inputLower = string.lower(currentText)
+                
+                -- Проверяем совпадение в начале имени
+                if string.sub(nameLower, 1, #inputLower) == inputLower then
+                    table.insert(foundPlayers, otherPlayer.Name)
+                elseif string.sub(displayLower, 1, #inputLower) == inputLower then
+                    table.insert(foundPlayers, otherPlayer.DisplayName)
+                end
+            end
         end
-    else
-        if espHighlights[otherPlayer] then
-            espHighlights[otherPlayer]:Destroy()
-            espHighlights[otherPlayer] = nil
+        
+        -- Если нашли игроков - автодополняем
+        if #foundPlayers > 0 then
+            -- Сортируем по алфавиту
+            table.sort(foundPlayers)
+            
+            -- Берем первого подходящего игрока
+            local selectedPlayer = foundPlayers[1]
+            
+            -- Устанавливаем текст
+            textBox.Text = selectedPlayer
+            
+            return true
+        else
+            return false
         end
     end
+    return false
+end
+
+-- Функция для применения ESP к конкретному игроку
+local espHighlights = {}
+
+local function applyESPToPlayer(otherPlayer)
+    if otherPlayer == player then return end
+    
+    -- Удаляем старый ESP если есть
+    if espHighlights[otherPlayer] then
+        espHighlights[otherPlayer]:Destroy()
+        espHighlights[otherPlayer] = nil
+    end
+    
+    if not espEnabled then return end
+    
+    -- Проверяем условия ESP
+    local shouldESP = false
+    if espTarget == "" then
+        shouldESP = true
+    else
+        shouldESP = string.lower(otherPlayer.Name) == string.lower(espTarget) or 
+                   string.lower(otherPlayer.DisplayName) == string.lower(espTarget)
+    end
+    
+    if shouldESP and otherPlayer.Character then
+        local highlight = Instance.new("Highlight")
+        highlight.Name = "SosisonESP"
+        highlight.FillTransparency = 1
+        highlight.OutlineColor = Color3.fromRGB(0, 100, 255)
+        highlight.OutlineTransparency = 0
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        highlight.Parent = otherPlayer.Character
+        espHighlights[otherPlayer] = highlight
+    end
+end
+
+-- Функция полного отключения ESP
+local function disableAllESP()
+    espEnabled = false
+    for player, highlight in pairs(espHighlights) do
+        if highlight then
+            highlight:Destroy()
+        end
+    end
+    espHighlights = {}
 end
 
 -- Обработчик появления новых игроков
 Players.PlayerAdded:Connect(function(newPlayer)
     if espEnabled then
-        applyESPToPlayer(newPlayer)
-    end
-    
-    newPlayer.CharacterAdded:Connect(function(character)
-        if espEnabled then
+        newPlayer.CharacterAdded:Connect(function(character)
             wait(1)
             applyESPToPlayer(newPlayer)
-        end
-    end)
+        end)
+    end
 end)
 
 -- Обработчик ухода игроков
@@ -106,26 +155,23 @@ end)
 local lastESPUpdate = 0
 local function updateESP()
     if not espEnabled then
-        for player, highlight in pairs(espHighlights) do
-            if highlight then
-                highlight:Destroy()
-            end
-        end
-        espHighlights = {}
+        disableAllESP()
         return
     end
     
-    -- Обновляем каждые 7 секунд для оптимизации
+    -- Обновляем каждые 3 секунды для оптимизации
     local currentTime = tick()
-    if currentTime - lastESPUpdate < 7 then return end
+    if currentTime - lastESPUpdate < 3 then return end
     lastESPUpdate = currentTime
     
     for _, otherPlayer in pairs(Players:GetPlayers()) do
-        applyESPToPlayer(otherPlayer)
+        if otherPlayer ~= player then
+            applyESPToPlayer(otherPlayer)
+        end
     end
 end
 
--- Обработчик смены персонажа у существующих игроков
+-- Инициализация ESP для существующих игроков
 for _, otherPlayer in pairs(Players:GetPlayers()) do
     if otherPlayer ~= player then
         otherPlayer.CharacterAdded:Connect(function(character)
@@ -242,7 +288,6 @@ local function updateSpeedSystem()
 end
 
 -- BodyVelocity метод для прыжка
-local jumpCooldown = false
 local lastJumpUpdate = 0
 local function updateJumpSystem()
     if not speedApplied then return end
@@ -345,7 +390,7 @@ screenGui.ResetOnSpawn = false
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 350, 0, 320)
+mainFrame.Size = UDim2.new(0, 350, 0, 350)
 mainFrame.Position = UDim2.new(0, 10, 0, 10)
 mainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
 mainFrame.BorderSizePixel = 0
@@ -460,14 +505,14 @@ espContent.ZIndex = 2
 espContent.Parent = mainFrame
 
 -- Стиль для кнопок
-local function createDarkButton(text, positionY)
+local function createDarkButton(text, positionY, height)
     local button = Instance.new("TextButton")
-    button.Size = UDim2.new(0.8, 0, 0, 35)
+    button.Size = UDim2.new(0.8, 0, 0, height or 35)
     button.Position = UDim2.new(0.1, 0, positionY, 0)
     button.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
     button.TextColor3 = Color3.fromRGB(200, 200, 200)
     button.Font = Enum.Font.GothamBold
-    button.TextSize = 12
+    button.TextSize = height and 10 or 12
     button.Text = text
     button.ZIndex = 2
     
@@ -479,14 +524,14 @@ local function createDarkButton(text, positionY)
 end
 
 -- Стиль для текстовых полей (без текста по умолчанию)
-local function createDarkTextBox(placeholder, positionY)
+local function createDarkTextBox(placeholder, positionY, height)
     local textBox = Instance.new("TextBox")
-    textBox.Size = UDim2.new(0.8, 0, 0, 20)
+    textBox.Size = UDim2.new(0.8, 0, 0, height or 20)
     textBox.Position = UDim2.new(0.1, 0, positionY, 0)
     textBox.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
     textBox.TextColor3 = Color3.fromRGB(200, 200, 200)
     textBox.Font = Enum.Font.Gotham
-    textBox.TextSize = 10
+    textBox.TextSize = height and 10 or 10
     textBox.PlaceholderText = placeholder
     textBox.Text = ""
     textBox.ZIndex = 2
@@ -499,18 +544,26 @@ local function createDarkTextBox(placeholder, positionY)
 end
 
 -- === CREAM EXPLOIT ВКЛАДКА ===
-local searchBox = createDarkTextBox("Ник цели (через запятую)", 0.1)
+local searchBox = createDarkTextBox("Ник цели (через запятую)", 0.05)
 searchBox.Parent = teleportContent
+
+-- Кнопка автоподбора для поиска
+local autoCompleteSearchButton = createDarkButton(" АВТОПОДБОР", 0.15, 20)
+autoCompleteSearchButton.Parent = teleportContent
 
 local ignoreBox = createDarkTextBox("Не телепортировать (через запятую)", 0.25)
 ignoreBox.Parent = teleportContent
 
-local button = createDarkButton("ВКЛ Телепорт ВСЕХ", 0.45)
+-- Кнопка автоподбора для игнора
+local autoCompleteIgnoreButton = createDarkButton(" АВТОПОДБОР", 0.35, 20)
+autoCompleteIgnoreButton.Parent = teleportContent
+
+local button = createDarkButton("ВКЛ Телепорт ВСЕХ", 0.5)
 button.Parent = teleportContent
 
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(0.8, 0, 0, 20)
-statusLabel.Position = UDim2.new(0.1, 0, 0.65, 0)
+statusLabel.Position = UDim2.new(0.1, 0, 0.7, 0)
 statusLabel.BackgroundTransparency = 1
 statusLabel.Text = "Режим: Все игроки"
 statusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
@@ -559,8 +612,12 @@ local emergencyStop = createDarkButton("ЭКСТРЕННАЯ ОСТАНОВКА"
 emergencyStop.Parent = speedContent
 
 -- === WH ВКЛАДКА ===
-local espSearchBox = createDarkTextBox("Ник игрока (оставьте пустым для всех)", 0.1)
+local espSearchBox = createDarkTextBox("Ник игрока (оставьте пустым для всех)", 0.05)
 espSearchBox.Parent = espContent
+
+-- Кнопка автоподбора для ESP
+local autoCompleteESPButton = createDarkButton(" АВТОПОДБОР", 0.15, 20)
+autoCompleteESPButton.Parent = espContent
 
 local espAllButton = createDarkButton("ВКЛ ВХ НА ВСЕХ", 0.3)
 espAllButton.Parent = espContent
@@ -579,7 +636,68 @@ espStatusLabel.TextSize = 9
 espStatusLabel.ZIndex = 2
 espStatusLabel.Parent = espContent
 
--- Обработчики
+-- Обработчики автоподбора
+autoCompleteSearchButton.MouseButton1Click:Connect(function()
+    local success = autoCompletePlayerName(searchBox)
+    if success then
+        autoCompleteSearchButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        wait(0.1)
+        autoCompleteSearchButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        
+        -- Обновляем targetPlayerName
+        targetPlayerName = searchBox.Text
+        teleportAll = false
+        button.Text = "ВКЛ Телепорт ВЫБРАННЫХ"
+        statusLabel.Text = "Цель: " .. targetPlayerName
+    else
+        autoCompleteSearchButton.BackgroundColor3 = Color3.fromRGB(80, 30, 30)
+        wait(0.2)
+        autoCompleteSearchButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    end
+end)
+
+autoCompleteIgnoreButton.MouseButton1Click:Connect(function()
+    local success = autoCompletePlayerName(ignoreBox)
+    if success then
+        autoCompleteIgnoreButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        wait(0.1)
+        autoCompleteIgnoreButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        
+        -- Обновляем ignorePlayerName
+        ignorePlayerName = ignoreBox.Text
+    else
+        autoCompleteIgnoreButton.BackgroundColor3 = Color3.fromRGB(80, 30, 30)
+        wait(0.2)
+        autoCompleteIgnoreButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    end
+end)
+
+autoCompleteESPButton.MouseButton1Click:Connect(function()
+    local success = autoCompletePlayerName(espSearchBox)
+    if success then
+        autoCompleteESPButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        wait(0.1)
+        autoCompleteESPButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        
+        -- Обновляем espTarget
+        espTarget = espSearchBox.Text
+        if espEnabled then
+            espStatusLabel.Text = "ВХ: ВКЛ - " .. espTarget
+            -- Обновляем ESP для новой цели
+            for _, otherPlayer in pairs(Players:GetPlayers()) do
+                if otherPlayer ~= player then
+                    applyESPToPlayer(otherPlayer)
+                end
+            end
+        end
+    else
+        autoCompleteESPButton.BackgroundColor3 = Color3.fromRGB(80, 30, 30)
+        wait(0.2)
+        autoCompleteESPButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    end
+end)
+
+-- Остальные обработчики
 searchBox:GetPropertyChangedSignal("Text"):Connect(function()
     if searchBox.Text == "" then
         teleportAll = true
@@ -613,6 +731,15 @@ end)
 -- Обработчики ESP
 espSearchBox:GetPropertyChangedSignal("Text"):Connect(function()
     espTarget = espSearchBox.Text
+    if espEnabled then
+        espStatusLabel.Text = "ВХ: ВКЛ - " .. (espTarget == "" and "Все игроки" or espTarget)
+        -- Обновляем ESP при изменении цели
+        for _, otherPlayer in pairs(Players:GetPlayers()) do
+            if otherPlayer ~= player then
+                applyESPToPlayer(otherPlayer)
+            end
+        end
+    end
 end)
 
 espAllButton.MouseButton1Click:Connect(function()
@@ -621,21 +748,21 @@ espAllButton.MouseButton1Click:Connect(function()
     espAllButton.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
     espOffButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
     print("Project Sosison WH включен")
+    
+    -- Немедленно применяем ESP ко всем игрокам
+    for _, otherPlayer in pairs(Players:GetPlayers()) do
+        if otherPlayer ~= player then
+            applyESPToPlayer(otherPlayer)
+        end
+    end
 end)
 
 espOffButton.MouseButton1Click:Connect(function()
-    espEnabled = false
+    disableAllESP()
     espStatusLabel.Text = "ВХ: ВЫКЛ"
     espAllButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
     espOffButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
     print("Project Sosison WH выключен")
-    
-    for player, highlight in pairs(espHighlights) do
-        if highlight then
-            highlight:Destroy()
-        end
-    end
-    espHighlights = {}
 end)
 
 -- Обработчики вкладок
@@ -700,12 +827,15 @@ end)
 closeButton.MouseButton1Click:Connect(function()
     screenGui:Destroy()
     enabled = false
-    espEnabled = false
+    disableAllESP()
     print("Project Sosison выключен")
 end)
 
 -- Добавляем GUI в игрока
 screenGui.Parent = player.PlayerGui
+
+print(" Автоподбор активирован!")
+print(" Напиши часть ника и нажми кнопку АВТОПОДБОР")
 
 -- Циклы обновления
 RunService.Heartbeat:Connect(function()
