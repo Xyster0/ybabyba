@@ -1,0 +1,707 @@
+local PlayerGui = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+local LocalPlayer = game.Players.LocalPlayer
+local Character = LocalPlayer.Character
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+repeat task.wait() until Character:FindFirstChild("RemoteEvent") and Character:FindFirstChild("RemoteFunction")
+local RemoteFunction, RemoteEvent = Character.RemoteFunction, Character.RemoteEvent
+local HRP = Character.PrimaryPart
+
+-- НАСТРОЙКИ
+getgenv().waitUntilCollect = 0.3
+getgenv().isFarming = false
+getgenv().platformVisible = false
+getgenv().noclipEnabled = false
+getgenv().superSpeed = 500
+
+-- ЛИМИТЫ ДЛЯ ПРЕДМЕТОВ
+getgenv().itemLimits = {
+    ["Rokakaka"] = 25,
+    ["Stand Arrow"] = 25,
+}
+
+-- ПЕРЕМЕННЫЕ ДЛЯ GUI
+local sellSettings = {
+    ["Ancient Scroll"] = true,
+    ["Caesar's Headband"] = true,
+    ["Clackers"] = true,
+    ["Diamond"] = true,
+    ["Dio's Diary"] = true,
+    ["Gold Coin"] = true,
+    ["Mysterious Arrow"] = true,
+    ["Pure Rokakaka"] = true,
+    ["Quinton's Glove"] = true,
+    ["Rib Cage of The Saint's Corpse"] = true,
+    ["Rokakaka"] = true,
+    ["Steel Ball"] = true,
+    ["Zeppeli's Hat"] = true,
+    ["Stone Mask"] = true
+}
+
+-- ТОЧНОЕ ДВИЖЕНИЕ К ПРЕДМЕТУ (не пролетает мимо)
+local function preciseSuperFastMove(targetPosition)
+    local character = LocalPlayer.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return end
+    
+    local humanoidRootPart = character.HumanoidRootPart
+    local currentPos = humanoidRootPart.Position
+    local distance = (targetPosition - currentPos).Magnitude
+    
+    -- РАЗБИВАЕМ ПУТЬ НА СЕГМЕНТЫ чтобы не пролететь
+    local segments = math.ceil(distance / 25)  -- Делим путь на отрезки по 25 единиц
+    local segmentDistance = distance / segments
+    
+    for i = 1, segments do
+        if not getgenv().isFarming then break end
+        
+        local progress = i / segments
+        local segmentPos = currentPos:Lerp(targetPosition, progress)
+        
+        humanoidRootPart.CFrame = CFrame.new(segmentPos)
+        
+        if i < segments then
+            task.wait(0.01)  -- Минимальная задержка между сегментами
+        end
+    end
+    
+    -- ФИНАЛЬНАЯ ТОЧНАЯ ПОЗИЦИЯ (гарантирует что встанешь прямо на предмет)
+    humanoidRootPart.CFrame = CFrame.new(targetPosition)
+end
+
+-- NO CLIP
+local noclipConnection = nil
+
+local function enableSuperNoClip()
+    if noclipConnection then
+        noclipConnection:Disconnect()
+    end
+    
+    noclipConnection = RunService.Stepped:Connect(function()
+        if not getgenv().noclipEnabled then return end
+        
+        local character = LocalPlayer.Character
+        if not character then return end
+        
+        for _, part in pairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+            end
+        end
+    end)
+end
+
+local function enableNoClipBypass()
+    local oldRaycast = workspace.Raycast
+    workspace.Raycast = function(...)
+        if getgenv().noclipEnabled then
+            return nil
+        end
+        return oldRaycast(...)
+    end
+end
+
+local function toggleSuperSpeed()
+    getgenv().noclipEnabled = not getgenv().noclipEnabled
+    
+    if getgenv().noclipEnabled then
+        enableSuperNoClip()
+        enableNoClipBypass()
+        print("🚀 СУПЕР СКОРОСТЬ АКТИВИРОВАНА!")
+    else
+        if noclipConnection then
+            noclipConnection:Disconnect()
+            noclipConnection = nil
+        end
+        print("❌ Супер скорость выключена")
+    end
+end
+
+-- СОЗДАЕМ ПЛАТФОРМУ ПОД НОГАМИ
+local platform = Instance.new("Part")
+platform.Name = "AntiFallPlatform"
+platform.Size = Vector3.new(10, 1, 10)
+platform.Anchored = true
+platform.CanCollide = true
+platform.Transparency = 1
+platform.Parent = workspace
+
+-- ФУНКЦИЯ ОБНОВЛЕНИЯ ПЛАТФОРМЫ
+local function updatePlatform()
+    while true do
+        if Character and HRP and getgenv().platformVisible then
+            platform.CFrame = CFrame.new(HRP.Position.X, HRP.Position.Y - 5, HRP.Position.Z)
+        end
+        task.wait(0.1)
+    end
+end
+
+task.spawn(updatePlatform)
+
+-- АНТИ-АФК
+local function antiAFK()
+    while true do
+        task.wait(30)
+        local VirtualUser = game:GetService("VirtualUser")
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
+    end
+end
+
+task.spawn(antiAFK)
+
+-- ФУНКЦИЯ ДЛЯ ПОИСКА ВСЕХ ПРЕДМЕТОВ НА КАРТЕ С СОРТИРОВКОЙ ПО БЛИЗОСТИ
+local function findItem(itemName)
+    local ItemsDict = {
+        ["Position"] = {},
+        ["ProximityPrompt"] = {},
+        ["Items"] = {}
+    }
+    
+    local tempItems = {}
+    
+    for _,item in pairs(game:GetService("Workspace")["Item_Spawns"].Items:GetChildren()) do
+        if item:FindFirstChild("MeshPart") and item.ProximityPrompt then
+            if item.ProximityPrompt.ObjectText == itemName then
+                if item.ProximityPrompt.MaxActivationDistance == 8 then
+                    table.insert(tempItems, {
+                        Position = item.MeshPart.CFrame,
+                        Prompt = item.ProximityPrompt,
+                        Distance = (HRP.Position - item.MeshPart.Position).Magnitude
+                    })
+                end
+            end
+        end
+    end
+    
+    table.sort(tempItems, function(a, b)
+        return a.Distance < b.Distance
+    end)
+    
+    for _, item in ipairs(tempItems) do
+        table.insert(ItemsDict["Items"], itemName)
+        table.insert(ItemsDict["ProximityPrompt"], item.Prompt)
+        table.insert(ItemsDict["Position"], item.Position)
+    end
+    
+    return ItemsDict
+end
+
+-- ФУНКЦИЯ ДЛЯ ПОДСЧЕТА КОЛИЧЕСТВА ПРЕДМЕТОВ В ИНВЕНТАРЕ
+local function countItems(itemName)
+    local itemAmount = 0
+    for _,item in pairs(game.Players.LocalPlayer.Backpack:GetChildren()) do
+        if item.Name == itemName then
+            itemAmount += 1
+        end
+    end
+    return itemAmount
+end
+
+-- ФУНКЦИЯ ПРОВЕРКИ ЛИМИТА ПРЕДМЕТА
+local function shouldCollectItem(itemName)
+    local limit = getgenv().itemLimits[itemName]
+    if limit then
+        local currentCount = countItems(itemName)
+        return currentCount < limit
+    end
+    return true
+end
+
+-- ФУНКЦИЯ ФОКУСИРОВКИ КАМЕРЫ НА ПРЕДМЕТЕ
+local function focusCameraOnItem(itemPosition)
+    if not Character:FindFirstChild("FocusCam") then
+        local FocusCam = Instance.new("ObjectValue")
+        FocusCam.Name = "FocusCam"
+        FocusCam.Parent = Character
+    end
+    
+    local focusPart = Instance.new("Part")
+    focusPart.Anchored = true
+    focusPart.CanCollide = false
+    focusPart.Transparency = 1
+    focusPart.Size = Vector3.new(1, 1, 1)
+    focusPart.CFrame = itemPosition
+    focusPart.Parent = workspace
+    
+    Character.FocusCam.Value = focusPart
+    
+    return focusPart
+end
+
+-- ФУНКЦИЯ ПРОДАЖИ ПРЕДМЕТОВ КОТОРЫХ БОЛЬШЕ 9+
+local function sellItemsIfOver9()
+    if not getgenv().isFarming then return false end
+    
+    local itemsToSell = {
+        "Ancient Scroll",
+        "Caesar's Headband",
+        "Clackers",
+        "Diamond",
+        "Dio's Diary",
+        "Gold Coin",
+        "Mysterious Arrow",
+        "Pure Rokakaka",
+        "Quinton's Glove",
+        "Rib Cage of The Saint's Corpse",
+        "Rokakaka",   
+        "Steel Ball",
+        "Zeppeli's Hat",
+        "Stone Mask"
+    }
+    
+    local soldSomething = false
+    
+    for _, itemName in pairs(itemsToSell) do
+        if sellSettings[itemName] and countItems(itemName) >= 9 then
+            local item = LocalPlayer.Backpack:FindFirstChild(itemName)
+            if item then
+                LocalPlayer.Character.Humanoid:EquipTool(item)
+                task.wait(0.3)
+                local dialogueToEnd = {
+                    ["NPC"] = "Merchant",
+                    ["Dialogue"] = "Dialogue5",
+                    ["Option"] = "Option2"
+                }
+                RemoteEvent:FireServer("EndDialogue", dialogueToEnd)
+                task.wait(0.3)
+                soldSomething = true
+            end
+        end
+    end
+    
+    return soldSomething
+end
+
+-- ОСНОВНАЯ ФУНКЦИЯ СБОРА ПРЕДМЕТА
+local function getitem(item, itemIndex)
+    if not getgenv().isFarming then return false end
+    
+    local gotItem = false
+    local startTime = tick()
+    local itemName = item["Items"][1]
+
+    if not shouldCollectItem(itemName) then
+        return false
+    end
+
+    if Character:FindFirstChild("SummonedStand") then
+        if Character:FindFirstChild("SummonedStand").Value then
+            RemoteFunction:InvokeServer("ToggleStand", "Toggle")
+        end
+    end
+
+    getgenv().platformVisible = true
+
+    local focusPart = focusCameraOnItem(item["Position"][itemIndex])
+
+    local connection
+    connection = LocalPlayer.Backpack.ChildAdded:Connect(function(child)
+        if child.Name == itemName then
+            gotItem = true
+            if connection then connection:Disconnect() end
+        end
+    end)
+    
+    -- ИСПОЛЬЗУЕМ ТОЧНОЕ ДВИЖЕНИЕ (не пролетает мимо)
+    preciseSuperFastMove(item["Position"][itemIndex].Position)
+
+    task.wait(getgenv().waitUntilCollect)
+
+    fireproximityprompt(item["ProximityPrompt"][itemIndex])
+    
+    local screenGui = LocalPlayer.PlayerGui:WaitForChild("ScreenGui", 1)
+    
+    if screenGui then
+        local screenGuiPart = screenGui:WaitForChild("Part", 1)
+        if screenGuiPart then
+            for _, button in pairs(screenGuiPart:GetDescendants()) do
+                if button:FindFirstChild("Part") then
+                    if button:IsA("ImageButton") and button:WaitForChild("Part").TextColor3 == Color3.new(0, 1, 0) then
+                        local clickTime = tick()
+                        repeat
+                            firesignal(button.MouseButton1Click)
+                            task.wait(0.1)
+                            if tick() - clickTime > 2 then
+                                break
+                            end
+                        until not LocalPlayer.PlayerGui:FindFirstChild("ScreenGui") or gotItem or not getgenv().isFarming
+                        break
+                    end
+                end
+            end
+        end
+    end
+    
+    while not gotItem and (tick() - startTime) < 3 and getgenv().isFarming do
+        task.wait(0.1)
+    end
+    
+    if focusPart then
+        focusPart:Destroy()
+    end
+    if Character:FindFirstChild("FocusCam") then
+        Character.FocusCam:Destroy()
+    end
+    
+    if connection then connection:Disconnect() end
+    
+    getgenv().platformVisible = false
+    
+    return gotItem
+end
+
+-- ФУНКЦИЯ ФАРМА КОНКРЕТНОГО ПРЕДМЕТА
+local function farmItem(itemName)
+    if not getgenv().isFarming then return false end
+    
+    if not shouldCollectItem(itemName) then
+        return false
+    end
+    
+    local items = findItem(itemName)
+    
+    if #items["Position"] == 0 then
+        return false
+    end
+
+    for itemIndex, _ in pairs(items["Position"]) do
+        if not getgenv().isFarming then break end
+        getitem(items, itemIndex)
+        task.wait(0.1)
+    end
+    
+    return true
+end
+
+-- ВСЕ ПРЕДМЕТЫ ДЛЯ ФАРМА
+local allItems = {
+    "Ancient Scroll",
+    "Blue Candy",
+    "Caesar's Headband", 
+    "Clackers",
+    "Diamond",
+    "Dio's Diary",
+    "Gold Coin",
+    "Green Candy",
+    "Heart of The Saint's Corpse",
+    "Koichi's Suitcase",
+    "Left Arm of The Saint's Corpse",
+    "Lighter",
+    "Mysterious Arrow",
+    "Pelvis of The Saint's Corpse",
+    "Pure Rokakaka", 
+    "Quinton's Glove",
+    "Red Candy",
+    "Rib Cage of The Saint's Corpse",
+    "Rokakaka",
+    "Stand Arrow",
+    "Steel Ball",
+    "Yellow Candy",
+    "Zeppeli's Hat",
+    "Lucky Arrow",
+    "Stone Mask",
+    "Lucky Stone Mask"
+}
+
+-- СОЗДАНИЕ GUI
+local function createGUI()
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "AutoFarmGUI"
+    ScreenGui.Parent = PlayerGui
+    ScreenGui.ResetOnSpawn = false
+
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Size = UDim2.new(0, 350, 0, 400)
+    MainFrame.Position = UDim2.new(0, 10, 0, 10)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+    MainFrame.BorderSizePixel = 0
+    MainFrame.Active = true
+    MainFrame.Draggable = true
+    MainFrame.ZIndex = 1
+    MainFrame.Parent = ScreenGui
+
+    local Corner = Instance.new("UICorner")
+    Corner.CornerRadius = UDim.new(0, 6)
+    Corner.Parent = MainFrame
+
+    local TitleBar = Instance.new("Frame")
+    TitleBar.Size = UDim2.new(1, 0, 0, 30)
+    TitleBar.Position = UDim2.new(0, 0, 0, 0)
+    TitleBar.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    TitleBar.ZIndex = 2
+    TitleBar.Parent = MainFrame
+
+    local TitleText = Instance.new("TextLabel")
+    TitleText.Size = UDim2.new(0.7, 0, 1, 0)
+    TitleText.Position = UDim2.new(0, 5, 0, 0)
+    TitleText.BackgroundTransparency = 1
+    TitleText.Text = "Auto Farm"
+    TitleText.TextColor3 = Color3.fromRGB(200, 200, 200)
+    TitleText.Font = Enum.Font.GothamBold
+    TitleText.TextSize = 14
+    TitleText.TextXAlignment = Enum.TextXAlignment.Left
+    TitleText.ZIndex = 3
+    TitleText.Parent = TitleBar
+
+    local CloseButton = Instance.new("TextButton")
+    CloseButton.Size = UDim2.new(0, 20, 0, 20)
+    CloseButton.Position = UDim2.new(1, -25, 0, 5)
+    CloseButton.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    CloseButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+    CloseButton.Font = Enum.Font.GothamBold
+    CloseButton.TextSize = 12
+    CloseButton.Text = "X"
+    CloseButton.ZIndex = 3
+    CloseButton.Parent = TitleBar
+
+    local TabsFrame = Instance.new("Frame")
+    TabsFrame.Size = UDim2.new(1, 0, 0, 25)
+    TabsFrame.Position = UDim2.new(0, 0, 0, 30)
+    TabsFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    TabsFrame.BorderSizePixel = 0
+    TabsFrame.ZIndex = 2
+    TabsFrame.Parent = MainFrame
+
+    local ItemsTab = Instance.new("TextButton")
+    ItemsTab.Size = UDim2.new(0.5, 0, 1, 0)
+    ItemsTab.Position = UDim2.new(0, 0, 0, 0)
+    ItemsTab.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    ItemsTab.TextColor3 = Color3.fromRGB(200, 200, 200)
+    ItemsTab.Font = Enum.Font.GothamBold
+    ItemsTab.TextSize = 10
+    ItemsTab.Text = "ITEMS"
+    ItemsTab.ZIndex = 3
+    ItemsTab.Parent = TabsFrame
+
+    local SettingsTab = Instance.new("TextButton")
+    SettingsTab.Size = UDim2.new(0.5, 0, 1, 0)
+    SettingsTab.Position = UDim2.new(0.5, 0, 0, 0)
+    SettingsTab.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    SettingsTab.TextColor3 = Color3.fromRGB(150, 150, 150)
+    SettingsTab.Font = Enum.Font.GothamBold
+    SettingsTab.TextSize = 10
+    SettingsTab.Text = "SETTINGS"
+    SettingsTab.ZIndex = 3
+    SettingsTab.Parent = TabsFrame
+
+    local ItemsScrollFrame = Instance.new("ScrollingFrame")
+    ItemsScrollFrame.Size = UDim2.new(1, 0, 1, -55)
+    ItemsScrollFrame.Position = UDim2.new(0, 0, 0, 55)
+    ItemsScrollFrame.BackgroundTransparency = 1
+    ItemsScrollFrame.ScrollBarThickness = 6
+    ItemsScrollFrame.Visible = true
+    ItemsScrollFrame.ZIndex = 2
+    ItemsScrollFrame.Parent = MainFrame
+
+    local ItemsLayout = Instance.new("UIListLayout")
+    ItemsLayout.Padding = UDim.new(0, 5)
+    ItemsLayout.Parent = ItemsScrollFrame
+
+    local SettingsContent = Instance.new("Frame")
+    SettingsContent.Size = UDim2.new(1, 0, 1, -55)
+    SettingsContent.Position = UDim2.new(0, 0, 0, 55)
+    SettingsContent.BackgroundTransparency = 1
+    SettingsContent.Visible = false
+    SettingsContent.ZIndex = 2
+    SettingsContent.Parent = MainFrame
+
+    local function createDarkButton(text, positionY)
+        local button = Instance.new("TextButton")
+        button.Size = UDim2.new(0.8, 0, 0, 35)
+        button.Position = UDim2.new(0.1, 0, positionY, 0)
+        button.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        button.TextColor3 = Color3.fromRGB(200, 200, 200)
+        button.Font = Enum.Font.GothamBold
+        button.TextSize = 12
+        button.Text = text
+        button.ZIndex = 2
+        
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 4)
+        corner.Parent = button
+        
+        return button
+    end
+
+    local function createCheckbox(itemName, enabled)
+        local ItemFrame = Instance.new("Frame")
+        ItemFrame.Size = UDim2.new(0.9, 0, 0, 25)
+        ItemFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+        ItemFrame.ZIndex = 2
+        ItemFrame.Parent = ItemsScrollFrame
+        
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 4)
+        corner.Parent = ItemFrame
+        
+        local ItemLabel = Instance.new("TextLabel")
+        ItemLabel.Size = UDim2.new(0.7, 0, 1, 0)
+        ItemLabel.Position = UDim2.new(0, 5, 0, 0)
+        ItemLabel.BackgroundTransparency = 1
+        ItemLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+        ItemLabel.Text = itemName
+        ItemLabel.Font = Enum.Font.Gotham
+        ItemLabel.TextSize = 11
+        ItemLabel.TextXAlignment = Enum.TextXAlignment.Left
+        ItemLabel.ZIndex = 3
+        ItemLabel.Parent = ItemFrame
+        
+        local ToggleButton = Instance.new("TextButton")
+        ToggleButton.Size = UDim2.new(0, 40, 0, 20)
+        ToggleButton.Position = UDim2.new(1, -45, 0.5, -10)
+        ToggleButton.BackgroundColor3 = enabled and Color3.fromRGB(60, 60, 60) or Color3.fromRGB(40, 40, 40)
+        ToggleButton.Text = enabled and "ON" or "OFF"
+        ToggleButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+        ToggleButton.Font = Enum.Font.GothamBold
+        ToggleButton.TextSize = 10
+        ToggleButton.ZIndex = 3
+        ToggleButton.Parent = ItemFrame
+        
+        local ToggleCorner = Instance.new("UICorner")
+        ToggleCorner.CornerRadius = UDim.new(0, 4)
+        ToggleCorner.Parent = ToggleButton
+        
+        ToggleButton.MouseButton1Click:Connect(function()
+            sellSettings[itemName] = not sellSettings[itemName]
+            ToggleButton.BackgroundColor3 = sellSettings[itemName] and Color3.fromRGB(60, 60, 60) or Color3.fromRGB(40, 40, 40)
+            ToggleButton.Text = sellSettings[itemName] and "ON" or "OFF"
+        end)
+        
+        return ItemFrame
+    end
+
+    local SellLabel = Instance.new("TextLabel")
+    SellLabel.Size = UDim2.new(0.8, 0, 0, 20)
+    SellLabel.Position = UDim2.new(0.1, 0, 0, 5)
+    SellLabel.BackgroundTransparency = 1
+    SellLabel.Text = "Вещи которые продавать"
+    SellLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    SellLabel.Font = Enum.Font.GothamBold
+    SellLabel.TextSize = 12
+    SellLabel.TextXAlignment = Enum.TextXAlignment.Center
+    SellLabel.ZIndex = 3
+    SellLabel.Parent = ItemsScrollFrame
+
+    for itemName, enabled in pairs(sellSettings) do
+        createCheckbox(itemName, enabled)
+    end
+
+    task.wait()
+    ItemsScrollFrame.CanvasSize = UDim2.new(0, 0, 0, ItemsLayout.AbsoluteContentSize.Y + 10)
+
+    local StartButton = createDarkButton("START FARM", 0.1)
+    StartButton.Parent = SettingsContent
+
+    local StopButton = createDarkButton("STOP FARM", 0.3)
+    StopButton.Parent = SettingsContent
+
+    local SuperSpeedButton = createDarkButton("SUPER SPEED: OFF", 0.5)
+    SuperSpeedButton.Parent = SettingsContent
+
+    local StatusLabel = Instance.new("TextLabel")
+    StatusLabel.Size = UDim2.new(0.8, 0, 0, 20)
+    StatusLabel.Position = UDim2.new(0.1, 0, 0.7, 0)
+    StatusLabel.BackgroundTransparency = 1
+    StatusLabel.Text = "Status: STOPPED"
+    StatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    StatusLabel.Font = Enum.Font.Gotham
+    StatusLabel.TextSize = 12
+    StatusLabel.ZIndex = 2
+    StatusLabel.Parent = SettingsContent
+
+    local function showTab(tab)
+        ItemsScrollFrame.Visible = (tab == "items")
+        SettingsContent.Visible = (tab == "settings")
+        
+        ItemsTab.BackgroundColor3 = (tab == "items") and Color3.fromRGB(25, 25, 25) or Color3.fromRGB(15, 15, 15)
+        SettingsTab.BackgroundColor3 = (tab == "settings") and Color3.fromRGB(25, 25, 25) or Color3.fromRGB(15, 15, 15)
+        
+        ItemsTab.TextColor3 = (tab == "items") and Color3.fromRGB(200, 200, 200) or Color3.fromRGB(150, 150, 150)
+        SettingsTab.TextColor3 = (tab == "settings") and Color3.fromRGB(200, 200, 200) or Color3.fromRGB(150, 150, 150)
+    end
+
+    ItemsTab.MouseButton1Click:Connect(function()
+        showTab("items")
+    end)
+
+    SettingsTab.MouseButton1Click:Connect(function()
+        showTab("settings")
+    end)
+
+    StartButton.MouseButton1Click:Connect(function()
+        getgenv().isFarming = true
+        if not getgenv().noclipEnabled then
+            toggleSuperSpeed()
+            SuperSpeedButton.Text = "SUPER SPEED: ON"
+            SuperSpeedButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        end
+        StartButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        StopButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        StatusLabel.Text = "Status: FARMING"
+    end)
+
+    StopButton.MouseButton1Click:Connect(function()
+        getgenv().isFarming = false
+        getgenv().platformVisible = false
+        StartButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        StopButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        StatusLabel.Text = "Status: STOPPED"
+    end)
+
+    SuperSpeedButton.MouseButton1Click:Connect(function()
+        toggleSuperSpeed()
+        SuperSpeedButton.Text = getgenv().noclipEnabled and "SUPER SPEED: ON" or "SUPER SPEED: OFF"
+        SuperSpeedButton.BackgroundColor3 = getgenv().noclipEnabled and Color3.fromRGB(60, 60, 60) or Color3.fromRGB(35, 35, 35)
+    end)
+
+    CloseButton.MouseButton1Click:Connect(function()
+        ScreenGui:Destroy()
+        getgenv().isFarming = false
+        getgenv().platformVisible = false
+        getgenv().noclipEnabled = false
+        if noclipConnection then
+            noclipConnection:Disconnect()
+        end
+    end)
+
+    UserInputService.InputBegan:Connect(function(input)
+        if input.KeyCode == Enum.KeyCode.RightShift then
+            MainFrame.Visible = not MainFrame.Visible
+        end
+    end)
+
+    return ScreenGui
+end
+
+local function onCharacterAdded(newCharacter)
+    Character = newCharacter
+    repeat task.wait() until Character:FindFirstChild("RemoteEvent") and Character:FindFirstChild("RemoteFunction")
+    RemoteFunction, RemoteEvent = Character.RemoteFunction, Character.RemoteEvent
+    HRP = Character.PrimaryPart
+end
+
+LocalPlayer.CharacterAdded:Connect(onCharacterAdded)
+
+local FarmGUI = createGUI()
+
+task.wait(2)
+
+while true do
+    if not Character or not Character.Parent then
+        Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+        repeat task.wait() until Character:FindFirstChild("RemoteEvent") and Character:FindFirstChild("RemoteFunction")
+        RemoteFunction, RemoteEvent = Character.RemoteFunction, Character.RemoteEvent
+        HRP = Character.PrimaryPart
+    end
+    
+    if getgenv().isFarming then
+        for _, itemName in pairs(allItems) do
+            if not getgenv().isFarming then break end
+            farmItem(itemName)
+        end
+        
+        sellItemsIfOver9()
+    end
+    
+    task.wait(0.1)
+end
