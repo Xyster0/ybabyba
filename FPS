@@ -1,0 +1,159 @@
+-- Максимальная оптимизация FPS с кнопкой вкл/выкл
+local Lighting = game:GetService("Lighting")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+
+local LocalPlayer = Players.LocalPlayer
+local isEnabled = true
+
+-- Сохраняем оригинальные настройки ПЕРЕД изменением
+local originalSettings = {
+    GlobalShadows = Lighting.GlobalShadows,
+    ShadowSoftness = Lighting.ShadowSoftness,
+    Technology = Lighting.Technology,
+    Brightness = Lighting.Brightness,
+    GeographicLatitude = Lighting.GeographicLatitude,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
+    ClockTime = Lighting.ClockTime,
+    FogEnd = Lighting.FogEnd,
+    FogStart = Lighting.FogStart,
+    Ambient = Lighting.Ambient,
+    ColorShift_Bottom = Lighting.ColorShift_Bottom,
+    ColorShift_Top = Lighting.ColorShift_Top
+}
+
+-- Сохраняем оригинальные эффекты
+local originalEffects = {}
+for _, effect in pairs(Lighting:GetChildren()) do
+    if effect:IsA("PostEffect") then
+        originalEffects[effect.Name] = effect.Enabled
+    end
+end
+
+-- Сохраняем оригинальные частицы
+local originalParticles = {}
+for _, obj in pairs(workspace:GetDescendants()) do
+    if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") or obj:IsA("Smoke") or obj:IsA("Fire") then
+        originalParticles[obj] = obj.Enabled
+    end
+end
+
+-- Функция для максимального FPS
+local function enableMaxFPS()
+    -- Полностью отключаем рендеринг
+    settings().Rendering.QualityLevel = 1
+    
+    -- Настройки освещения
+    Lighting.GlobalShadows = false
+    Lighting.ShadowSoftness = 0
+    Lighting.Technology = Enum.Technology.Legacy
+    Lighting.Brightness = 2
+    Lighting.GeographicLatitude = 41.733
+    Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+    Lighting.ClockTime = 14
+    Lighting.FogEnd = 100000
+    Lighting.FogStart = 100000
+    Lighting.Ambient = Color3.fromRGB(128, 128, 128)
+    
+    -- Отключаем все эффекты
+    for _, effect in pairs(Lighting:GetChildren()) do
+        if effect:IsA("PostEffect") then
+            effect.Enabled = false
+        end
+    end
+    
+    -- Отключаем частицы и эффекты
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") or obj:IsA("Smoke") or obj:IsA("Fire") then
+            pcall(function() obj.Enabled = false end)
+        end
+    end
+    
+    -- ОТКЛЮЧАЕМ 3D РЕНДЕРИНГ
+    RunService:Set3dRenderingEnabled(false)
+    
+    print("🔥 МАКСИМАЛЬНЫЙ FPS АКТИВИРОВАН!")
+end
+
+-- Функция для возврата настроек
+local function disableMaxFPS()
+    -- ВКЛЮЧАЕМ 3D РЕНДЕРИНГ
+    RunService:Set3dRenderingEnabled(true)
+    
+    -- Восстанавливаем качество
+    settings().Rendering.QualityLevel = 3
+    
+    -- Восстанавливаем освещение
+    Lighting.GlobalShadows = originalSettings.GlobalShadows
+    Lighting.ShadowSoftness = originalSettings.ShadowSoftness
+    Lighting.Technology = originalSettings.Technology
+    Lighting.Brightness = originalSettings.Brightness
+    Lighting.GeographicLatitude = originalSettings.GeographicLatitude
+    Lighting.OutdoorAmbient = originalSettings.OutdoorAmbient
+    Lighting.ClockTime = originalSettings.ClockTime
+    Lighting.FogEnd = originalSettings.FogEnd
+    Lighting.FogStart = originalSettings.FogStart
+    Lighting.Ambient = originalSettings.Ambient
+    Lighting.ColorShift_Bottom = originalSettings.ColorShift_Bottom
+    Lighting.ColorShift_Top = originalSettings.ColorShift_Top
+    
+    -- Восстанавливаем эффекты
+    for _, effect in pairs(Lighting:GetChildren()) do
+        if effect:IsA("PostEffect") and originalEffects[effect.Name] ~= nil then
+            effect.Enabled = originalEffects[effect.Name]
+        end
+    end
+    
+    -- Восстанавливаем частицы
+    for obj, enabled in pairs(originalParticles) do
+        if obj and obj.Parent then
+            pcall(function() obj.Enabled = enabled end)
+        end
+    end
+    
+    print("🔧 Настройки графики восстановлены")
+end
+
+-- Создаем кнопку
+local function createToggleButton()
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "FPSBoosterGUI"
+    ScreenGui.Parent = LocalPlayer.PlayerGui
+    ScreenGui.ResetOnSpawn = false
+
+    local ToggleButton = Instance.new("TextButton")
+    ToggleButton.Size = UDim2.new(0, 120, 0, 40)
+    ToggleButton.Position = UDim2.new(1, -130, 0, 10)
+    ToggleButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    ToggleButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+    ToggleButton.Font = Enum.Font.GothamBold
+    ToggleButton.TextSize = 12
+    ToggleButton.Text = "FPS BOOST: ON"
+    ToggleButton.Parent = ScreenGui
+
+    local Corner = Instance.new("UICorner")
+    Corner.CornerRadius = UDim.new(0, 6)
+    Corner.Parent = ToggleButton
+
+    -- Обработчик клика
+    ToggleButton.MouseButton1Click:Connect(function()
+        isEnabled = not isEnabled
+        
+        if isEnabled then
+            enableMaxFPS()
+            ToggleButton.Text = "FPS BOOST: ON"
+            ToggleButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        else
+            disableMaxFPS()
+            ToggleButton.Text = "FPS BOOST: OFF"
+            ToggleButton.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+        end
+    end)
+
+    return ScreenGui
+end
+
+-- Автозапуск при старте
+task.wait(1)
+enableMaxFPS()
+createToggleButton()
