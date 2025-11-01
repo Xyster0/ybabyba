@@ -1,0 +1,1125 @@
+-- SOSISON HUB - Скрипт телепортации с перемещаемым GUI
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local enabled = false
+local targetPlayerName = ""
+local ignorePlayerName = ""
+local teleportAll = true
+local espEnabled = false
+local espTarget = ""
+local guiVisible = true
+
+-- Настройки скорости
+local originalWalkSpeed = 50
+local originalJumpPower = 50
+local customWalkSpeed = 50
+local customJumpPower = 50
+local moveDirection = Vector3.new(0, 0, 0)
+local speedApplied = false
+local lastInputTime = 0
+
+-- Настройки полета
+local flySpeed = 100
+local isFlying = false
+local flyBodyVelocity = nil
+local flyConnection = nil
+local flyBindKey = "U" -- Клавиша по умолчанию для полета
+
+print("SOSISON HUB загружен")
+
+-- Функция сброса движения
+local function resetMovement()
+    moveDirection = Vector3.new(0, 0, 0)
+    
+    local char = player.Character
+    if char and char:FindFirstChild("HumanoidRootPart") then
+        local bv = char.HumanoidRootPart:FindFirstChild("RePozSpeed")
+        if bv then
+            bv:Destroy()
+        end
+    end
+end
+
+-- Обработчики фокуса окна
+UserInputService.WindowFocusReleased:Connect(function()
+    resetMovement()
+end)
+
+UserInputService.WindowFocused:Connect(function()
+    resetMovement()
+end)
+
+-- Функция автоподбора ника
+local function autoCompletePlayerName(textBox)
+    local currentText = textBox.Text
+    
+    if currentText ~= "" then
+        -- Ищем игроков по частичному совпадению
+        local foundPlayers = {}
+        
+        for _, otherPlayer in pairs(Players:GetPlayers()) do
+            if otherPlayer ~= player then
+                local nameLower = string.lower(otherPlayer.Name)
+                local displayLower = string.lower(otherPlayer.DisplayName)
+                local inputLower = string.lower(currentText)
+                
+                -- Проверяем совпадение в начале имени
+                if string.sub(nameLower, 1, #inputLower) == inputLower then
+                    table.insert(foundPlayers, otherPlayer.Name)
+                elseif string.sub(displayLower, 1, #inputLower) == inputLower then
+                    table.insert(foundPlayers, otherPlayer.DisplayName)
+                end
+            end
+        end
+        
+        -- Если нашли игроков - автодополняем
+        if #foundPlayers > 0 then
+            -- Сортируем по алфавиту
+            table.sort(foundPlayers)
+            
+            -- Берем первого подходящего игрока
+            local selectedPlayer = foundPlayers[1]
+            
+            -- Устанавливаем текст
+            textBox.Text = selectedPlayer
+            
+            return true
+        else
+            return false
+        end
+    end
+    return false
+end
+
+-- Функция для применения ESP к конкретному игроку
+local espHighlights = {}
+
+local function applyESPToPlayer(otherPlayer)
+    if otherPlayer == player then return end
+    
+    -- Удаляем старый ESP если есть
+    if espHighlights[otherPlayer] then
+        espHighlights[otherPlayer]:Destroy()
+        espHighlights[otherPlayer] = nil
+    end
+    
+    if not espEnabled then return end
+    
+    -- Проверяем условия ESP
+    local shouldESP = false
+    if espTarget == "" then
+        shouldESP = true
+    else
+        shouldESP = string.lower(otherPlayer.Name) == string.lower(espTarget) or 
+                   string.lower(otherPlayer.DisplayName) == string.lower(espTarget)
+    end
+    
+    if shouldESP and otherPlayer.Character then
+        local highlight = Instance.new("Highlight")
+        highlight.Name = "SosisonESP"
+        highlight.FillTransparency = 1
+        highlight.OutlineColor = Color3.fromRGB(0, 100, 255)
+        highlight.OutlineTransparency = 0
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        highlight.Parent = otherPlayer.Character
+        espHighlights[otherPlayer] = highlight
+    end
+end
+
+-- Функция полного отключения ESP
+local function disableAllESP()
+    espEnabled = false
+    for player, highlight in pairs(espHighlights) do
+        if highlight then
+            highlight:Destroy()
+        end
+    end
+    espHighlights = {}
+end
+
+-- Обработчик появления новых игроков
+Players.PlayerAdded:Connect(function(newPlayer)
+    if espEnabled then
+        newPlayer.CharacterAdded:Connect(function(character)
+            wait(1)
+            applyESPToPlayer(newPlayer)
+        end)
+    end
+end)
+
+-- Обработчик ухода игроков
+Players.PlayerRemoving:Connect(function(leftPlayer)
+    if espHighlights[leftPlayer] then
+        espHighlights[leftPlayer]:Destroy()
+        espHighlights[leftPlayer] = nil
+    end
+end)
+
+-- Функция ESP (ВХ) - ОПТИМИЗИРОВАННАЯ
+local lastESPUpdate = 0
+local function updateESP()
+    if not espEnabled then
+        disableAllESP()
+        return
+    end
+    
+    -- Обновляем каждые 3 секунды для оптимизации
+    local currentTime = tick()
+    if currentTime - lastESPUpdate < 3 then return end
+    lastESPUpdate = currentTime
+    
+    for _, otherPlayer in pairs(Players:GetPlayers()) do
+        if otherPlayer ~= player then
+            applyESPToPlayer(otherPlayer)
+        end
+    end
+end
+
+-- Инициализация ESP для существующих игроков
+for _, otherPlayer in pairs(Players:GetPlayers()) do
+    if otherPlayer ~= player then
+        otherPlayer.CharacterAdded:Connect(function(character)
+            if espEnabled then
+                wait(1)
+                applyESPToPlayer(otherPlayer)
+            end
+        end)
+    end
+end
+
+-- Функция плотной телепортации в игрока
+local function ultraDenseTeleport()
+    if not enabled then return end
+    
+    local myChar = player.Character
+    if not myChar then return end
+    
+    local myHRP = myChar:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return end
+    
+    local myPos = myHRP.Position
+    
+    if teleportAll then
+        for _, otherPlayer in pairs(Players:GetPlayers()) do
+            if otherPlayer ~= player then
+                if ignorePlayerName ~= "" then
+                    local shouldIgnore = string.lower(otherPlayer.Name) == string.lower(ignorePlayerName) or 
+                                       string.lower(otherPlayer.DisplayName) == string.lower(ignorePlayerName)
+                    if shouldIgnore then
+                        continue
+                    end
+                end
+                
+                local otherChar = otherPlayer.Character
+                if otherChar then
+                    local otherHRP = otherChar:FindFirstChild("HumanoidRootPart")
+                    if otherHRP then
+                        local offset = Vector3.new(math.random(-1, 1), 0, math.random(-1, 1))
+                        otherHRP.CFrame = CFrame.new(myPos + offset)
+                    end
+                end
+            end
+        end
+    else
+        if targetPlayerName ~= "" then
+            local playersToTeleport = {}
+            
+            for name in string.gmatch(targetPlayerName, "[^,]+") do
+                local trimmedName = string.gsub(name, "^%s*(.-)%s*$", "%1")
+                if trimmedName ~= "" then
+                    table.insert(playersToTeleport, trimmedName)
+                end
+            end
+            
+            for _, targetName in ipairs(playersToTeleport) do
+                for _, otherPlayer in pairs(Players:GetPlayers()) do
+                    if otherPlayer ~= player then
+                        if string.lower(otherPlayer.Name) == string.lower(targetName) or 
+                           string.lower(otherPlayer.DisplayName) == string.lower(targetName) then
+                            local otherChar = otherPlayer.Character
+                            if otherChar then
+                                local otherHRP = otherChar:FindFirstChild("HumanoidRootPart")
+                                if otherHRP then
+                                    local offset = Vector3.new(math.random(-1, 1), 0, math.random(-1, 1))
+                                    otherHRP.CFrame = CFrame.new(myPos + offset)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Функция управления скоростью
+local function updateSpeedSystem()
+    if not speedApplied then return end
+    
+    -- Надежная проверка на активный чат
+    if UserInputService:GetFocusedTextBox() ~= nil then
+        resetMovement()
+        return
+    end
+    
+    local char = player.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    
+    local hrp = char.HumanoidRootPart
+    
+    local oldBv = hrp:FindFirstChild("RePozSpeed")
+    if oldBv then
+        oldBv:Destroy()
+    end
+    
+    if moveDirection.Magnitude > 0 then
+        local newBv = Instance.new("BodyVelocity")
+        newBv.Name = "RePozSpeed"
+        
+        local camera = workspace.CurrentCamera
+        local cameraCFrame = camera.CFrame
+        
+        local right = cameraCFrame.RightVector * moveDirection.X
+        local forward = cameraCFrame.LookVector * -moveDirection.Z
+        local worldDirection = (right + forward) * customWalkSpeed
+        
+        worldDirection = Vector3.new(worldDirection.X, 0, worldDirection.Z)
+        
+        newBv.Velocity = worldDirection
+        newBv.MaxForce = Vector3.new(40000, 0, 40000)
+        newBv.Parent = hrp
+    end
+end
+
+-- BodyVelocity метод для прыжка
+local lastJumpUpdate = 0
+local function updateJumpSystem()
+    if not speedApplied then return end
+    
+    local currentTime = tick()
+    if currentTime - lastJumpUpdate < 0.5 then return end
+    
+    local character = player.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local hrp = character.HumanoidRootPart
+    
+    if humanoid and humanoid:GetState() == Enum.HumanoidStateType.Jumping then
+        local speedBv = hrp:FindFirstChild("RePozSpeed")
+        if speedBv then
+            speedBv:Destroy()
+        end
+        
+        local jumpBv = Instance.new("BodyVelocity")
+        jumpBv.Name = "RePozJump"
+        jumpBv.Velocity = Vector3.new(0, customJumpPower, 0)
+        jumpBv.MaxForce = Vector3.new(0, 45000, 0)
+        jumpBv.Parent = hrp
+        
+        lastJumpUpdate = currentTime
+        
+        delay(0.3, function()
+            if jumpBv and jumpBv.Parent then
+                jumpBv:Destroy()
+            end
+            if moveDirection.Magnitude > 0 then
+                updateSpeedSystem()
+            end
+        end)
+    end
+end
+
+-- Обработчики движения с надежной проверкой чата
+local function handleInput(input, isBegan)
+    if UserInputService:GetFocusedTextBox() ~= nil then
+        return
+    end
+    
+    local key = input.KeyCode
+    local direction = Vector3.new(0, 0, 0)
+    
+    if key == Enum.KeyCode.W then
+        direction = Vector3.new(0, 0, -1)
+    elseif key == Enum.KeyCode.S then
+        direction = Vector3.new(0, 0, 1)
+    elseif key == Enum.KeyCode.A then
+        direction = Vector3.new(-1, 0, 0)
+    elseif key == Enum.KeyCode.D then
+        direction = Vector3.new(1, 0, 0)
+    else
+        return
+    end
+    
+    if isBegan then
+        moveDirection = moveDirection + direction
+        lastInputTime = tick()
+    else
+        moveDirection = moveDirection - direction
+        local char = player.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            local bv = char.HumanoidRootPart:FindFirstChild("RePozSpeed")
+            if bv then
+                bv:Destroy()
+            end
+        end
+    end
+end
+
+UserInputService.InputBegan:Connect(function(input)
+    handleInput(input, true)
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    handleInput(input, false)
+end)
+
+-- Дополнительная защита: очистка скорости если нет ввода
+RunService.Heartbeat:Connect(function()
+    if tick() - lastInputTime > 0.1 and moveDirection.Magnitude == 0 then
+        local char = player.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            local bv = char.HumanoidRootPart:FindFirstChild("RePozSpeed")
+            if bv then
+                bv:Destroy()
+            end
+        end
+    end
+end)
+
+-- ========== СИСТЕМА ПОЛЕТА ==========
+local function startFlying()
+    if isFlying then return end
+    
+    local character = player.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return end
+    
+    isFlying = true
+    local humanoidRootPart = character.HumanoidRootPart
+    
+    -- Создаем BodyVelocity для полета
+    flyBodyVelocity = Instance.new("BodyVelocity")
+    flyBodyVelocity.Velocity = Vector3.new(0, 0, 0)
+    flyBodyVelocity.MaxForce = Vector3.new(40000, 40000, 40000)
+    flyBodyVelocity.Parent = humanoidRootPart
+    
+    -- Обработка управления полетом
+    flyConnection = RunService.Heartbeat:Connect(function()
+        if not isFlying or not flyBodyVelocity or not humanoidRootPart then
+            if flyConnection then
+                flyConnection:Disconnect()
+            end
+            return
+        end
+        
+        -- Надежная проверка на активный чат
+        if UserInputService:GetFocusedTextBox() ~= nil then
+            flyBodyVelocity.Velocity = Vector3.new(0, 0, 0)
+            return
+        end
+        
+        local direction = Vector3.new(0, 0, 0)
+        
+        -- Получаем направление от камеры
+        local camera = workspace.CurrentCamera
+        local cameraCFrame = camera.CFrame
+        
+        -- W - вперед (по направлению взгляда камеры)
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+            direction = direction + cameraCFrame.LookVector
+        end
+        
+        -- S - назад (против направления взгляда камеры)
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+            direction = direction - cameraCFrame.LookVector
+        end
+        
+        -- A - влево (влево от направления камеры)
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+            direction = direction - cameraCFrame.RightVector
+        end
+        
+        -- D - вправо (вправо от направления камеры)
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+            direction = direction + cameraCFrame.RightVector
+        end
+        
+        -- Space - вверх
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+            direction = direction + Vector3.new(0, 1, 0)
+        end
+        
+        -- LeftShift - вниз
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+            direction = direction + Vector3.new(0, -1, 0)
+        end
+        
+        -- Нормализуем направление и применяем скорость
+        if direction.Magnitude > 0 then
+            flyBodyVelocity.Velocity = direction.Unit * flySpeed
+        else
+            flyBodyVelocity.Velocity = Vector3.new(0, 0, 0)
+        end
+    end)
+end
+
+local function stopFlying()
+    if not isFlying then return end
+    
+    isFlying = false
+    
+    if flyBodyVelocity then
+        flyBodyVelocity:Destroy()
+        flyBodyVelocity = nil
+    end
+    
+    if flyConnection then
+        flyConnection:Disconnect()
+        flyConnection = nil
+    end
+end
+
+-- Обработчик клавиши для полета
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    local keyName = string.upper(input.KeyCode.Name)
+    if keyName == flyBindKey then
+        if isFlying then
+            stopFlying()
+        else
+            startFlying()
+        end
+    end
+end)
+
+-- ========== СОЗДАНИЕ GUI ==========
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "SosisonHubGUI"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 350, 0, 400)
+mainFrame.Position = UDim2.new(0, 10, 0, 10)
+mainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.ZIndex = 1
+mainFrame.Parent = screenGui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 6)
+corner.Parent = mainFrame
+
+-- Заголовок
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 30)
+titleBar.Position = UDim2.new(0, 0, 0, 0)
+titleBar.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+titleBar.ZIndex = 2
+titleBar.Parent = mainFrame
+
+local titleText = Instance.new("TextLabel")
+titleText.Size = UDim2.new(0.7, 0, 1, 0)
+titleText.Position = UDim2.new(0, 5, 0, 0)
+titleText.BackgroundTransparency = 1
+titleText.Text = "SOSISON HUB"
+titleText.TextColor3 = Color3.fromRGB(200, 200, 200)
+titleText.Font = Enum.Font.GothamBold
+titleText.TextSize = 14
+titleText.TextXAlignment = Enum.TextXAlignment.Left
+titleText.ZIndex = 3
+titleText.Parent = titleBar
+
+-- Кнопка закрытия
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.new(0, 20, 0, 20)
+closeButton.Position = UDim2.new(1, -25, 0, 5)
+closeButton.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+closeButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+closeButton.Font = Enum.Font.GothamBold
+closeButton.TextSize = 12
+closeButton.Text = "X"
+closeButton.ZIndex = 3
+closeButton.Parent = titleBar
+
+-- Вкладки
+local tabsFrame = Instance.new("Frame")
+tabsFrame.Size = UDim2.new(1, 0, 0, 25)
+tabsFrame.Position = UDim2.new(0, 0, 0, 30)
+tabsFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+tabsFrame.BorderSizePixel = 0
+tabsFrame.ZIndex = 2
+tabsFrame.Parent = mainFrame
+
+local teleportTab = Instance.new("TextButton")
+teleportTab.Size = UDim2.new(0.2, 0, 1, 0)
+teleportTab.Position = UDim2.new(0, 0, 0, 0)
+teleportTab.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+teleportTab.TextColor3 = Color3.fromRGB(200, 200, 200)
+teleportTab.Font = Enum.Font.GothamBold
+teleportTab.TextSize = 10
+teleportTab.Text = "CREAM"
+teleportTab.ZIndex = 3
+teleportTab.Parent = tabsFrame
+
+local speedTab = Instance.new("TextButton")
+speedTab.Size = UDim2.new(0.2, 0, 1, 0)
+speedTab.Position = UDim2.new(0.2, 0, 0, 0)
+speedTab.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+speedTab.TextColor3 = Color3.fromRGB(150, 150, 150)
+speedTab.Font = Enum.Font.GothamBold
+speedTab.TextSize = 10
+speedTab.Text = "SPEED"
+speedTab.ZIndex = 3
+speedTab.Parent = tabsFrame
+
+local espTab = Instance.new("TextButton")
+espTab.Size = UDim2.new(0.2, 0, 1, 0)
+espTab.Position = UDim2.new(0.4, 0, 0, 0)
+espTab.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+espTab.TextColor3 = Color3.fromRGB(150, 150, 150)
+espTab.Font = Enum.Font.GothamBold
+espTab.TextSize = 10
+espTab.Text = "WH"
+espTab.ZIndex = 3
+espTab.Parent = tabsFrame
+
+local flyTab = Instance.new("TextButton")
+flyTab.Size = UDim2.new(0.2, 0, 1, 0)
+flyTab.Position = UDim2.new(0.6, 0, 0, 0)
+flyTab.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+flyTab.TextColor3 = Color3.fromRGB(150, 150, 150)
+flyTab.Font = Enum.Font.GothamBold
+flyTab.TextSize = 10
+flyTab.Text = "FLY"
+flyTab.ZIndex = 3
+flyTab.Parent = tabsFrame
+
+local moreTab = Instance.new("TextButton")
+moreTab.Size = UDim2.new(0.2, 0, 1, 0)
+moreTab.Position = UDim2.new(0.8, 0, 0, 0)
+moreTab.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+moreTab.TextColor3 = Color3.fromRGB(150, 150, 150)
+moreTab.Font = Enum.Font.GothamBold
+moreTab.TextSize = 10
+moreTab.Text = "MORE"
+moreTab.ZIndex = 3
+moreTab.Parent = tabsFrame
+
+-- Контент телепорта
+local teleportContent = Instance.new("Frame")
+teleportContent.Size = UDim2.new(1, 0, 1, -55)
+teleportContent.Position = UDim2.new(0, 0, 0, 55)
+teleportContent.BackgroundTransparency = 1
+teleportContent.Visible = true
+teleportContent.ZIndex = 2
+teleportContent.Parent = mainFrame
+
+-- Контент скорости
+local speedContent = Instance.new("Frame")
+speedContent.Size = UDim2.new(1, 0, 1, -55)
+speedContent.Position = UDim2.new(0, 0, 0, 55)
+speedContent.BackgroundTransparency = 1
+speedContent.Visible = false
+speedContent.ZIndex = 2
+speedContent.Parent = mainFrame
+
+-- Контент ESP
+local espContent = Instance.new("Frame")
+espContent.Size = UDim2.new(1, 0, 1, -55)
+espContent.Position = UDim2.new(0, 0, 0, 55)
+espContent.BackgroundTransparency = 1
+espContent.Visible = false
+espContent.ZIndex = 2
+espContent.Parent = mainFrame
+
+-- Контент FLY
+local flyContent = Instance.new("Frame")
+flyContent.Size = UDim2.new(1, 0, 1, -55)
+flyContent.Position = UDim2.new(0, 0, 0, 55)
+flyContent.BackgroundTransparency = 1
+flyContent.Visible = false
+flyContent.ZIndex = 2
+flyContent.Parent = mainFrame
+
+-- Контент MORE
+local moreContent = Instance.new("Frame")
+moreContent.Size = UDim2.new(1, 0, 1, -55)
+moreContent.Position = UDim2.new(0, 0, 0, 55)
+moreContent.BackgroundTransparency = 1
+moreContent.Visible = false
+moreContent.ZIndex = 2
+moreContent.Parent = mainFrame
+
+-- Стиль для кнопок
+local function createDarkButton(text, positionY, height)
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(0.8, 0, 0, height or 35)
+    button.Position = UDim2.new(0.1, 0, positionY, 0)
+    button.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    button.TextColor3 = Color3.fromRGB(200, 200, 200)
+    button.Font = Enum.Font.GothamBold
+    button.TextSize = height and 10 or 12
+    button.Text = text
+    button.ZIndex = 2
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 4)
+    corner.Parent = button
+    
+    return button
+end
+
+-- Стиль для текстовых полей (без текста по умолчанию)
+local function createDarkTextBox(placeholder, positionY, height)
+    local textBox = Instance.new("TextBox")
+    textBox.Size = UDim2.new(0.8, 0, 0, height or 20)
+    textBox.Position = UDim2.new(0.1, 0, positionY, 0)
+    textBox.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    textBox.TextColor3 = Color3.fromRGB(200, 200, 200)
+    textBox.Font = Enum.Font.Gotham
+    textBox.TextSize = height and 10 or 10
+    textBox.PlaceholderText = placeholder
+    textBox.Text = ""
+    textBox.ZIndex = 2
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 4)
+    corner.Parent = textBox
+    
+    return textBox
+end
+
+-- === CREAM ВКЛАДКА ===
+local searchBox = createDarkTextBox("Ник цели (через запятую)", 0.05)
+searchBox.Parent = teleportContent
+
+-- Кнопка автоподбора для поиска
+local autoCompleteSearchButton = createDarkButton(" АВТОПОДБОР", 0.15, 20)
+autoCompleteSearchButton.Parent = teleportContent
+
+local ignoreBox = createDarkTextBox("Не телепортировать (через запятую)", 0.25)
+ignoreBox.Parent = teleportContent
+
+-- Кнопка автоподбора для игнора
+local autoCompleteIgnoreButton = createDarkButton(" АВТОПОДБОР", 0.35, 20)
+autoCompleteIgnoreButton.Parent = teleportContent
+
+local button = createDarkButton("ВКЛ Телепорт ВСЕХ", 0.5)
+button.Parent = teleportContent
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(0.8, 0, 0, 20)
+statusLabel.Position = UDim2.new(0.1, 0, 0.7, 0)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Режим: Все игроки"
+statusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextSize = 9
+statusLabel.ZIndex = 2
+statusLabel.Parent = teleportContent
+
+-- === SPEED ВКЛАДКА ===
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Size = UDim2.new(0.8, 0, 0, 20)
+speedLabel.Position = UDim2.new(0.1, 0, 0.05, 0)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Text = "Скорость бега: " .. originalWalkSpeed
+speedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+speedLabel.Font = Enum.Font.Gotham
+speedLabel.TextSize = 12
+speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+speedLabel.ZIndex = 2
+speedLabel.Parent = speedContent
+
+local speedBox = createDarkTextBox("Скорость", 0.12)
+speedBox.Text = tostring(originalWalkSpeed)
+speedBox.Parent = speedContent
+
+local jumpLabel = Instance.new("TextLabel")
+jumpLabel.Size = UDim2.new(0.8, 0, 0, 20)
+jumpLabel.Position = UDim2.new(0.1, 0, 0.22, 0)
+jumpLabel.BackgroundTransparency = 1
+jumpLabel.Text = "Высота прыжка: " .. customJumpPower
+jumpLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+jumpLabel.Font = Enum.Font.Gotham
+jumpLabel.TextSize = 12
+jumpLabel.TextXAlignment = Enum.TextXAlignment.Left
+jumpLabel.ZIndex = 2
+jumpLabel.Parent = speedContent
+
+local jumpBox = createDarkTextBox("Прыжок", 0.29)
+jumpBox.Text = tostring(customJumpPower)
+jumpBox.Parent = speedContent
+
+local applySpeedButton = createDarkButton("Применить настройки", 0.63)
+applySpeedButton.Parent = speedContent
+
+local emergencyStop = createDarkButton("ЭКСТРЕННАЯ ОСТАНОВКА", 0.87)
+emergencyStop.Parent = speedContent
+
+-- === WH ВКЛАДКА ===
+local espSearchBox = createDarkTextBox("Ник игрока (оставьте пустым для всех)", 0.05)
+espSearchBox.Parent = espContent
+
+-- Кнопка автоподбора для ESP
+local autoCompleteESPButton = createDarkButton(" АВТОПОДБОР", 0.15, 20)
+autoCompleteESPButton.Parent = espContent
+
+local espAllButton = createDarkButton("ВКЛ ВХ НА ВСЕХ", 0.3)
+espAllButton.Parent = espContent
+
+local espOffButton = createDarkButton("ВЫКЛ ВХ", 0.5)
+espOffButton.Parent = espContent
+
+local espStatusLabel = Instance.new("TextLabel")
+espStatusLabel.Size = UDim2.new(0.8, 0, 0, 20)
+espStatusLabel.Position = UDim2.new(0.1, 0, 0.75, 0)
+espStatusLabel.BackgroundTransparency = 1
+espStatusLabel.Text = "ВХ: ВЫКЛ"
+espStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+espStatusLabel.Font = Enum.Font.Gotham
+espStatusLabel.TextSize = 9
+espStatusLabel.ZIndex = 2
+espStatusLabel.Parent = espContent
+
+-- === FLY ВКЛАДКА ===
+local flySpeedLabel = Instance.new("TextLabel")
+flySpeedLabel.Size = UDim2.new(0.8, 0, 0, 20)
+flySpeedLabel.Position = UDim2.new(0.1, 0, 0.05, 0)
+flySpeedLabel.BackgroundTransparency = 1
+flySpeedLabel.Text = "Скорость полета: " .. flySpeed
+flySpeedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+flySpeedLabel.Font = Enum.Font.Gotham
+flySpeedLabel.TextSize = 12
+flySpeedLabel.TextXAlignment = Enum.TextXAlignment.Left
+flySpeedLabel.ZIndex = 2
+flySpeedLabel.Parent = flyContent
+
+local flySpeedBox = createDarkTextBox("Скорость полета", 0.12)
+flySpeedBox.Text = tostring(flySpeed)
+flySpeedBox.Parent = flyContent
+
+local flyBindLabel = Instance.new("TextLabel")
+flyBindLabel.Size = UDim2.new(0.8, 0, 0, 20)
+flyBindLabel.Position = UDim2.new(0.1, 0, 0.25, 0)
+flyBindLabel.BackgroundTransparency = 1
+flyBindLabel.Text = "Клавиша полета: " .. flyBindKey
+flyBindLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+flyBindLabel.Font = Enum.Font.Gotham
+flyBindLabel.TextSize = 12
+flyBindLabel.TextXAlignment = Enum.TextXAlignment.Left
+flyBindLabel.ZIndex = 2
+flyBindLabel.Parent = flyContent
+
+local flyBindBox = createDarkTextBox("Клавиша (например: U)", 0.32)
+flyBindBox.Text = flyBindKey
+flyBindBox.Parent = flyContent
+
+local applyFlyButton = createDarkButton("Применить настройки", 0.45)
+applyFlyButton.Parent = flyContent
+
+local flyButton = createDarkButton("ВКЛ ПОЛЕТ", 0.6)
+flyButton.Parent = flyContent
+
+local flyStatusLabel = Instance.new("TextLabel")
+flyStatusLabel.Size = UDim2.new(0.8, 0, 0, 20)
+flyStatusLabel.Position = UDim2.new(0.1, 0, 0.75, 0)
+flyStatusLabel.BackgroundTransparency = 1
+flyStatusLabel.Text = "Полет: ВЫКЛ"
+flyStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+flyStatusLabel.Font = Enum.Font.Gotham
+flyStatusLabel.TextSize = 9
+flyStatusLabel.ZIndex = 2
+flyStatusLabel.Parent = flyContent
+
+-- === MORE ВКЛАДКА ===
+local arHelperButton = createDarkButton("AR HELPER", 0.1)
+arHelperButton.Parent = moreContent
+
+local itemFarmButton = createDarkButton("ITEM FARM", 0.3)
+itemFarmButton.Parent = moreContent
+
+local fpsButton = createDarkButton("FPS BOOST", 0.5)
+fpsButton.Parent = moreContent
+
+-- Обработчики автоподбора
+autoCompleteSearchButton.MouseButton1Click:Connect(function()
+    local success = autoCompletePlayerName(searchBox)
+    if success then
+        autoCompleteSearchButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        wait(0.1)
+        autoCompleteSearchButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        
+        -- Обновляем targetPlayerName
+        targetPlayerName = searchBox.Text
+        teleportAll = false
+        button.Text = "ВКЛ Телепорт ВЫБРАННЫХ"
+        statusLabel.Text = "Цель: " .. targetPlayerName
+    else
+        autoCompleteSearchButton.BackgroundColor3 = Color3.fromRGB(80, 30, 30)
+        wait(0.2)
+        autoCompleteSearchButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    end
+end)
+
+autoCompleteIgnoreButton.MouseButton1Click:Connect(function()
+    local success = autoCompletePlayerName(ignoreBox)
+    if success then
+        autoCompleteIgnoreButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        wait(0.1)
+        autoCompleteIgnoreButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        
+        -- Обновляем ignorePlayerName
+        ignorePlayerName = ignoreBox.Text
+    else
+        autoCompleteIgnoreButton.BackgroundColor3 = Color3.fromRGB(80, 30, 30)
+        wait(0.2)
+        autoCompleteIgnoreButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    end
+end)
+
+autoCompleteESPButton.MouseButton1Click:Connect(function()
+    local success = autoCompletePlayerName(espSearchBox)
+    if success then
+        autoCompleteESPButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        wait(0.1)
+        autoCompleteESPButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        
+        -- Обновляем espTarget
+        espTarget = espSearchBox.Text
+        if espEnabled then
+            espStatusLabel.Text = "ВХ: ВКЛ - " .. espTarget
+            -- Обновляем ESP для новой цели
+            for _, otherPlayer in pairs(Players:GetPlayers()) do
+                if otherPlayer ~= player then
+                    applyESPToPlayer(otherPlayer)
+                end
+            end
+        end
+    else
+        autoCompleteESPButton.BackgroundColor3 = Color3.fromRGB(80, 30, 30)
+        wait(0.2)
+        autoCompleteESPButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    end
+end)
+
+-- Остальные обработчики
+searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+    if searchBox.Text == "" then
+        teleportAll = true
+        targetPlayerName = ""
+        button.Text = "ВКЛ Телепорт ВСЕХ"
+    else
+        teleportAll = false
+        targetPlayerName = searchBox.Text
+        button.Text = "ВКЛ Телепорт ВЫБРАННЫХ"
+    end
+    statusLabel.Text = "Цель: " .. (targetPlayerName == "" and "Все" or targetPlayerName)
+end)
+
+ignoreBox:GetPropertyChangedSignal("Text"):Connect(function()
+    ignorePlayerName = ignoreBox.Text
+end)
+
+button.MouseButton1Click:Connect(function()
+    enabled = not enabled
+    if enabled then
+        button.Text = "ВЫКЛ Телепорт " .. (teleportAll and "ВСЕХ" or "ВЫБРАННЫХ")
+        button.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+        print("SOSISON HUB телепорт включен")
+    else
+        button.Text = "ВКЛ Телепорт " .. (teleportAll and "ВСЕХ" or "ВЫБРАННЫХ")
+        button.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        print("SOSISON HUB телепорт выключен")
+    end
+end)
+
+-- Обработчики ESP
+espSearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+    espTarget = espSearchBox.Text
+    if espEnabled then
+        espStatusLabel.Text = "ВХ: ВКЛ - " .. (espTarget == "" and "Все игроки" or espTarget)
+        -- Обновляем ESP при изменении цели
+        for _, otherPlayer in pairs(Players:GetPlayers()) do
+            if otherPlayer ~= player then
+                applyESPToPlayer(otherPlayer)
+            end
+        end
+    end
+end)
+
+espAllButton.MouseButton1Click:Connect(function()
+    espEnabled = true
+    espStatusLabel.Text = "ВХ: ВКЛ - " .. (espTarget == "" and "Все игроки" or espTarget)
+    espAllButton.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    espOffButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    print("SOSISON HUB WH включен")
+    
+    -- Немедленно применяем ESP ко всем игрокам
+    for _, otherPlayer in pairs(Players:GetPlayers()) do
+        if otherPlayer ~= player then
+            applyESPToPlayer(otherPlayer)
+        end
+    end
+end)
+
+espOffButton.MouseButton1Click:Connect(function()
+    disableAllESP()
+    espStatusLabel.Text = "ВХ: ВЫКЛ"
+    espAllButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    espOffButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    print("SOSISON HUB WH выключен")
+end)
+
+-- Обработчики FLY вкладки
+applyFlyButton.MouseButton1Click:Connect(function()
+    local newFlySpeed = tonumber(flySpeedBox.Text)
+    local newBindKey = flyBindBox.Text:upper()
+    
+    if newFlySpeed then
+        flySpeed = newFlySpeed
+        flySpeedLabel.Text = "Скорость полета: " .. newFlySpeed
+    end
+    
+    if newBindKey ~= "" then
+        flyBindKey = newBindKey
+        flyBindLabel.Text = "Клавиша полета: " .. flyBindKey
+    end
+    
+    print("SOSISON HUB настройки полета применены")
+end)
+
+flyButton.MouseButton1Click:Connect(function()
+    if isFlying then
+        stopFlying()
+        flyButton.Text = "ВКЛ ПОЛЕТ"
+        flyButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        flyStatusLabel.Text = "Полет: ВЫКЛ"
+        print("🛬 РЕЖИМ ПОЛЕТА ОТКЛЮЧЕН!")
+    else
+        startFlying()
+        flyButton.Text = "ВЫКЛ ПОЛЕТ"
+        flyButton.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+        flyStatusLabel.Text = "Полет: ВКЛ"
+        print("🛫 РЕЖИМ ПОЛЕТА АКТИВИРОВАН!")
+    end
+end)
+
+-- Обработчики MORE вкладки
+arHelperButton.MouseButton1Click:Connect(function()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/Xyster0/ybabyba/refs/heads/main/ARROWROKAHELPER"))()
+    print("AR HELPER запущен")
+end)
+
+itemFarmButton.MouseButton1Click:Connect(function()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/Xyster0/ybabyba/refs/heads/main/ITEMFARM2"))()
+    print("ITEM FARM запущен")
+end)
+
+fpsButton.MouseButton1Click:Connect(function()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/Xyster0/ybabyba/refs/heads/main/FPS"))()
+    print("FPS BOOST запущен")
+end)
+
+-- Обработчики вкладок
+local function showTab(tab)
+    teleportContent.Visible = (tab == "teleport")
+    speedContent.Visible = (tab == "speed") 
+    espContent.Visible = (tab == "esp")
+    flyContent.Visible = (tab == "fly")
+    moreContent.Visible = (tab == "more")
+    
+    teleportTab.BackgroundColor3 = (tab == "teleport") and Color3.fromRGB(25, 25, 25) or Color3.fromRGB(15, 15, 15)
+    speedTab.BackgroundColor3 = (tab == "speed") and Color3.fromRGB(25, 25, 25) or Color3.fromRGB(15, 15, 15)
+    espTab.BackgroundColor3 = (tab == "esp") and Color3.fromRGB(25, 25, 25) or Color3.fromRGB(15, 15, 15)
+    flyTab.BackgroundColor3 = (tab == "fly") and Color3.fromRGB(25, 25, 25) or Color3.fromRGB(15, 15, 15)
+    moreTab.BackgroundColor3 = (tab == "more") and Color3.fromRGB(25, 25, 25) or Color3.fromRGB(15, 15, 15)
+    
+    teleportTab.TextColor3 = (tab == "teleport") and Color3.fromRGB(200, 200, 200) or Color3.fromRGB(150, 150, 150)
+    speedTab.TextColor3 = (tab == "speed") and Color3.fromRGB(200, 200, 200) or Color3.fromRGB(150, 150, 150)
+    espTab.TextColor3 = (tab == "esp") and Color3.fromRGB(200, 200, 200) or Color3.fromRGB(150, 150, 150)
+    flyTab.TextColor3 = (tab == "fly") and Color3.fromRGB(200, 200, 200) or Color3.fromRGB(150, 150, 150)
+    moreTab.TextColor3 = (tab == "more") and Color3.fromRGB(200, 200, 200) or Color3.fromRGB(150, 150, 150)
+end
+
+teleportTab.MouseButton1Click:Connect(function()
+    showTab("teleport")
+end)
+
+speedTab.MouseButton1Click:Connect(function()
+    showTab("speed")
+end)
+
+espTab.MouseButton1Click:Connect(function()
+    showTab("esp")
+end)
+
+flyTab.MouseButton1Click:Connect(function()
+    showTab("fly")
+end)
+
+moreTab.MouseButton1Click:Connect(function()
+    showTab("more")
+end)
+
+applySpeedButton.MouseButton1Click:Connect(function()
+    local newSpeed = tonumber(speedBox.Text)
+    local newJump = tonumber(jumpBox.Text)
+    
+    if newSpeed then
+        customWalkSpeed = newSpeed
+        speedLabel.Text = "Скорость бега: " .. newSpeed
+    end
+    
+    if newJump then
+        customJumpPower = newJump
+        jumpLabel.Text = "Высота прыжка: " .. newJump
+    end
+    
+    speedApplied = true
+    print("SOSISON HUB настройки скорости применены")
+end)
+
+emergencyStop.MouseButton1Click:Connect(function()
+    resetMovement()
+    speedApplied = false
+    stopFlying()
+    print("SOSISON HUB экстренная остановка")
+end)
+
+-- Скрытие/показ GUI по правому CTRL
+UserInputService.InputBegan:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.RightControl then
+        guiVisible = not guiVisible
+        mainFrame.Visible = guiVisible
+    end
+end)
+
+closeButton.MouseButton1Click:Connect(function()
+    screenGui:Destroy()
+    enabled = false
+    disableAllESP()
+    stopFlying()
+    print("SOSISON HUB выключен")
+end)
+
+-- Добавляем GUI в игрока
+screenGui.Parent = player.PlayerGui
+
+print(" Автоподбор активирован!")
+print(" Напиши часть ника и нажми кнопку АВТОПОДБОР")
+
+-- Циклы обновления
+RunService.Heartbeat:Connect(function()
+    ultraDenseTeleport()
+    updateSpeedSystem()
+    updateJumpSystem()
+    updateESP()
+end)
