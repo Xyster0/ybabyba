@@ -1,0 +1,392 @@
+--[[
+    FREESTYLE - АИМ РАБОТАЕТ НА NPC
+]]
+
+-- Сервисы
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- Настройки
+local Settings = {
+    AimbotEnabled = false,
+    Target = nil,
+    AimKey = Enum.KeyCode.E,
+    FreestyleEnabled = false,
+    NaoyaEnabled = false,
+    FrameEnabled = false,
+    CurrentSpeed = 25,
+    Acceleration = 0,
+    MAX_SPEED = 300
+}
+
+-- Переменные
+local lastPosition = nil
+local lastTime = tick()
+local ACCEL_RATE = 10
+
+-- Naoya Morph
+local function PerfectNaoyaMorph()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local head = char:FindFirstChild("Head")
+    if not head then return end
+
+    for _, obj in pairs(char:GetChildren()) do
+        if obj:IsA("Accessory") or obj:IsA("Shirt") or obj:IsA("Pants") then
+            obj:Destroy()
+        end
+    end
+
+    head.Transparency = 1
+    local face = head:FindFirstChildOfClass("Decal")
+    if face then face:Destroy() end
+
+    pcall(function()
+        local objects = game:GetObjects("rbxassetid://115937922832993")
+        for _, obj in pairs(objects) do
+            local hair = obj:IsA("Accessory") and obj or obj:FindFirstChildOfClass("Accessory")
+            if hair then
+                hair.Parent = char
+                local handle = hair:FindFirstChild("Handle")
+                if handle then
+                    handle.CanCollide = false
+                    local weld = Instance.new("Weld", handle)
+                    weld.Part0 = handle
+                    weld.Part1 = head
+                    weld.C1 = CFrame.new(0, 0, 0)
+                end
+            end
+        end
+    end)
+
+    pcall(function()
+        local targetModel = Players:CreateHumanoidModelFromUserId(Players:GetUserIdFromNameAsync("Skylong888"))
+        if targetModel then
+            for _, v in pairs(targetModel:GetChildren()) do
+                if v:IsA("Shirt") or v:IsA("Pants") or v:IsA("BodyColors") then
+                    v:Clone().Parent = char
+                end
+            end
+            targetModel:Destroy()
+        end
+    end)
+end
+
+-- ПОИСК ЦЕЛИ (ИГРОКИ + NPC)
+local function GetClosestTarget()
+    local closest = nil
+    local shortestDist = math.huge
+    local center = Camera.ViewportSize / 2
+    
+    -- ПОИСК ИГРОКОВ
+    for _, v in pairs(Players:GetPlayers()) do
+        if v ~= LocalPlayer and v.Character then
+            local humanoid = v.Character:FindFirstChild("Humanoid")
+            if humanoid and humanoid.Health > 0 then
+                local part = v.Character:FindFirstChild("HumanoidRootPart") or v.Character:FindFirstChild("Torso") or v.Character:FindFirstChild("Head")
+                if part then
+                    local pos, onScreen = Camera:WorldToViewportPoint(part.Position)
+                    if onScreen then
+                        local dist = (Vector2.new(pos.X, pos.Y) - center).magnitude
+                        if dist < shortestDist then
+                            closest = v.Character
+                            shortestDist = dist
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    -- ПОИСК NPC (все модели с Humanoid)
+    for _, v in pairs(workspace:GetDescendants()) do
+        if v:IsA("Model") and v ~= LocalPlayer.Character then
+            local humanoid = v:FindFirstChild("Humanoid")
+            if humanoid and humanoid.Health > 0 then
+                -- Проверяем что это не игрок
+                local isPlayer = false
+                for _, player in pairs(Players:GetPlayers()) do
+                    if player.Character == v then
+                        isPlayer = true
+                        break
+                    end
+                end
+                
+                if not isPlayer then
+                    local part = v:FindFirstChild("HumanoidRootPart") or v:FindFirstChild("Torso") or v:FindFirstChild("Head") or v:FindFirstChild("UpperTorso")
+                    if part then
+                        local pos, onScreen = Camera:WorldToViewportPoint(part.Position)
+                        if onScreen then
+                            local dist = (Vector2.new(pos.X, pos.Y) - center).magnitude
+                            if dist < shortestDist then
+                                closest = v
+                                shortestDist = dist
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    return closest
+end
+
+-- ГЛАВНЫЙ ЦИКЛ АИМА
+RunService.RenderStepped:Connect(function()
+    if Settings.AimbotEnabled then
+        -- Если цели нет - ищем
+        if not Settings.Target then
+            Settings.Target = GetClosestTarget()
+            if Settings.Target then
+                print("Цель найдена:", Settings.Target.Name or "NPC")
+            end
+        end
+        
+        -- Если цель есть - проверяем жива ли и наводимся
+        if Settings.Target then
+            local humanoid = Settings.Target:FindFirstChild("Humanoid")
+            if humanoid and humanoid.Health > 0 then
+                local part = Settings.Target:FindFirstChild("HumanoidRootPart") or 
+                            Settings.Target:FindFirstChild("Torso") or 
+                            Settings.Target:FindFirstChild("Head") or 
+                            Settings.Target:FindFirstChild("UpperTorso")
+                if part then
+                    Camera.CFrame = CFrame.new(Camera.CFrame.Position, part.Position)
+                end
+            else
+                Settings.Target = nil -- цель мертва, сбрасываем
+            end
+        end
+    end
+end)
+
+-- ВКЛ/ВЫКЛ ПО E
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == Enum.KeyCode.E then
+        Settings.AimbotEnabled = not Settings.AimbotEnabled
+        if Settings.AimbotEnabled then
+            Settings.Target = GetClosestTarget()
+            if Settings.Target then
+                print("Аим включен, цель:", Settings.Target.Name or "NPC")
+            else
+                print("Аим включен, целей нет")
+            end
+        else
+            Settings.Target = nil
+            print("Аим выключен")
+        end
+    end
+end)
+
+-- НОРМАЛЬНЫЙ РАЗГОН
+RunService.Heartbeat:Connect(function()
+    local dt = tick() - lastTime
+    lastTime = tick()
+    
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    local humanoid = char:FindFirstChild("Humanoid")
+    if not humanoid then return end
+    
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    
+    -- Проверка движения
+    if not lastPosition then
+        lastPosition = root.Position
+        return
+    end
+    
+    local moved = (root.Position - lastPosition).magnitude > 0.1
+    lastPosition = root.Position
+    
+    -- FRAME логика
+    if Settings.FrameEnabled then
+        if moved then
+            Settings.Acceleration = Settings.Acceleration + (dt * ACCEL_RATE)
+            Settings.CurrentSpeed = math.min(Settings.MAX_SPEED, 25 + Settings.Acceleration)
+        else
+            Settings.Acceleration = 0
+            Settings.CurrentSpeed = 25
+        end
+    else
+        Settings.CurrentSpeed = 25
+        Settings.Acceleration = 0
+    end
+    
+    humanoid.WalkSpeed = Settings.CurrentSpeed
+end)
+
+-- Фантомы
+local function CreateGhost()
+    if Settings.CurrentSpeed < 50 then return end
+    
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    local ghostFolder = Instance.new("Model")
+    ghostFolder.Parent = workspace
+    ghostFolder.Name = "GhostEffect"
+    
+    for _, part in pairs(char:GetChildren()) do
+        if part:IsA("BasePart") and part.Transparency < 1 then
+            local ghost
+            
+            if part.Name == "Head" then
+                ghost = Instance.new("Part")
+                ghost.Size = Vector3.new(1.2, 1.2, 1.2)
+                ghost.CFrame = part.CFrame
+                ghost.Name = "CylinderHead"
+                local mesh = Instance.new("SpecialMesh", ghost)
+                mesh.MeshType = Enum.MeshType.Cylinder
+            else
+                ghost = Instance.new("Part")
+                ghost.Size = part.Size
+                ghost.CFrame = part.CFrame
+                ghost.Name = part.Name
+            end
+            
+            ghost.Anchored = true
+            ghost.CanCollide = false
+            ghost.Material = Enum.Material.Neon
+            ghost.Color = Color3.fromRGB(150, 150, 255)
+            ghost.Transparency = 0.3
+            ghost.Parent = ghostFolder
+            
+            local tween = TweenService:Create(ghost, TweenInfo.new(1), {Transparency = 1})
+            tween:Play()
+        end
+    end
+    
+    Debris:AddItem(ghostFolder, 1.1)
+end
+
+-- Цикл фантомов
+task.spawn(function()
+    while true do
+        if Settings.FreestyleEnabled then
+            local speed = Settings.CurrentSpeed
+            local waitTime = 0.2
+            
+            if speed >= 200 then
+                waitTime = 0.05
+            elseif speed >= 100 then
+                waitTime = 0.1
+            elseif speed >= 50 then
+                waitTime = 0.2
+            else
+                task.wait(0.2)
+                continue
+            end
+            
+            CreateGhost()
+            task.wait(waitTime)
+        else
+            task.wait(0.2)
+        end
+    end
+end)
+
+-- Naoya после смерти
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    if Settings.NaoyaEnabled then
+        PerfectNaoyaMorph()
+    end
+end)
+
+-- GUI
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+ScreenGui.Name = "FreestyleGUI"
+ScreenGui.ResetOnSpawn = false
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 200, 0, 160)
+MainFrame.Position = UDim2.new(0, 10, 0.5, -80)
+MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 5)
+UICorner.Parent = MainFrame
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 30)
+Title.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+Title.Text = "FREESTYLE v5.0"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 14
+Title.Parent = MainFrame
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 20, 0, 20)
+CloseBtn.Position = UDim2.new(1, -25, 0, 5)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 12
+CloseBtn.Parent = Title
+CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
+
+local yPos = 35
+
+local function CreateButton(text, y, var, callback)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0.9, 0, 0, 25)
+    btn.Position = UDim2.new(0.05, 0, 0, y)
+    btn.BackgroundColor3 = Settings[var] and Color3.fromRGB(0, 200, 0) or Color3.fromRGB(50, 50, 50)
+    btn.Text = text .. ": " .. (Settings[var] and "ON" or "OFF")
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.Gotham
+    btn.TextSize = 12
+    btn.Parent = MainFrame
+    btn.MouseButton1Click:Connect(function()
+        Settings[var] = not Settings[var]
+        btn.BackgroundColor3 = Settings[var] and Color3.fromRGB(0, 200, 0) or Color3.fromRGB(50, 50, 50)
+        btn.Text = text .. ": " .. (Settings[var] and "ON" or "OFF")
+        if var == "NaoyaEnabled" and Settings[var] then
+            PerfectNaoyaMorph()
+        end
+    end)
+end
+
+CreateButton("Freestyle", yPos, "FreestyleEnabled")
+yPos = yPos + 30
+CreateButton("Naoya", yPos, "NaoyaEnabled")
+yPos = yPos + 30
+CreateButton("Frame", yPos, "FrameEnabled")
+
+-- Инфо
+local Info = Instance.new("TextLabel")
+Info.Size = UDim2.new(0.9, 0, 0, 40)
+Info.Position = UDim2.new(0.05, 0, 0, yPos + 30)
+Info.BackgroundTransparency = 1
+Info.Text = "E - Аим (NPC + игроки)\nFrame: разгон до 300\n50+=0.2c 100+=0.1c 200+=0.05c"
+Info.TextColor3 = Color3.fromRGB(150, 150, 150)
+Info.TextXAlignment = Enum.TextXAlignment.Left
+Info.Font = Enum.Font.Gotham
+Info.TextSize = 11
+Info.Parent = MainFrame
+
+-- RightControl скрытие
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == Enum.KeyCode.RightControl then
+        MainFrame.Visible = not MainFrame.Visible
+    end
+end)
+
+print("=== FREESTYLE ===")
