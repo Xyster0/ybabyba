@@ -1,5 +1,5 @@
 --[[
-    FREESTYLE - АИМ РАБОТАЕТ НА NPC
+    TRUE HEAD OF THE HEI - ЭФФЕКТЫ РАБОТАЮТ + СБИВАНИЕ
 ]]
 
 -- Сервисы
@@ -11,23 +11,378 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
+-- Функция проверки названия ульты
+local function CheckUltimateName()
+    local success, result = pcall(function()
+        return LocalPlayer.PlayerGui.Main.Ultimate.Title.Text
+    end)
+    return success and result == "Vengeance"
+end
+
+-- Функция принудительного выключения скрипта
+local function KillScript()
+    local gui = LocalPlayer.PlayerGui:FindFirstChild("FreestyleGUI")
+    if gui then
+        gui:Destroy()
+    end
+    
+    local notification = Instance.new("Message")
+    notification.Text = "TRUE HEAD OF THE HEI: Ultimate must be 'Vengeance'! Скрипт выключен."
+    notification.Parent = workspace
+    task.wait(3)
+    notification:Destroy()
+    return
+end
+
+-- Проверка при запуске
+if not CheckUltimateName() then
+    KillScript()
+    return
+end
+
 -- Настройки
 local Settings = {
     AimbotEnabled = false,
     Target = nil,
     AimKey = Enum.KeyCode.E,
-    FreestyleEnabled = false,
+    AimRadius = 100,
     NaoyaEnabled = false,
     FrameEnabled = false,
     CurrentSpeed = 25,
     Acceleration = 0,
-    MAX_SPEED = 300
+    MAX_SPEED = 250,
+    lastHealth = 100,
+    stunned = false,
+    StunTime = 0,
+    Barrage = false,
+    BarrageTarget = nil,
+    BarrageSpeed = 25,
+    BarrageDistance = 3.5,
+    BarrageTime = 0,
+    BarrageDuration = 5,
+    BarrageCooldown = 0,
+    BarrageCooldownDuration = 20,
+    GreatestHigh = false,
+    GreatestHighTarget = nil,
+    GreatestHighCooldown = 0,
+    GreatestHighCooldownDuration = 30,
+    GreatestHighRange = 20,
+    GreatestHighActive = false,
+    TimingActive = false,
+    TimingStartTime = 0,
+    SpeedBoostActive = false,
+    Frozen = false,
+    FrozenUntil = 0,
+    NextTargetSpeed = 0,
+    JustStarted = false,
+    CanBarrage = false,
+    LastCTime = 0,
+    CWindowStart = 0,
+    CWindowActive = false,
+    CCooldownActive = false,
+    SpeedLevel = 1,
+    SpeedValues = {25, 40, 90, 130, 200, 250},
+    PressWindow = 0.3,
+    FrozenParts = {},
+    BarrageActive = false,
+    CurrentTarget = nil,
+    DamageStun = false,
+    WasMoving = false,
+    KillAnimationActive = false
 }
 
 -- Переменные
 local lastPosition = nil
 local lastTime = tick()
-local ACCEL_RATE = 10
+local ACCEL_RATE = 20
+local DECEL_RATE = 50
+local tapGui = nil
+local SpeedLabel = nil
+local CooldownLabel = nil
+local BarrageLabel = nil
+local GreatestHighLabel = nil
+local TimerLabel = nil
+
+-- ===== ЭФФЕКТ ЭКРАНА =====
+local ScreenEffect = Instance.new("Frame")
+ScreenEffect.Size = UDim2.new(1, 0, 1, 0)
+ScreenEffect.Position = UDim2.new(0, 0, 0, 0)
+ScreenEffect.BackgroundColor3 = Color3.fromRGB(150, 150, 255)
+ScreenEffect.BackgroundTransparency = 1
+ScreenEffect.BorderSizePixel = 0
+ScreenEffect.Parent = LocalPlayer:WaitForChild("PlayerGui")
+ScreenEffect.ZIndex = 999999
+ScreenEffect.Visible = true
+
+local function SetScreenEffect(intensity)
+    ScreenEffect.BackgroundTransparency = 1 - math.clamp(intensity, 0, 1)
+    print("ЭФФЕКТ УСТАНОВЛЕН:", intensity, "ПРОЗРАЧНОСТЬ:", ScreenEffect.BackgroundTransparency)
+end
+
+-- ===== АНИМАЦИИ =====
+local CurrentAnimation = nil
+local KillAnimationConn = nil
+local Humanoid = nil
+
+local function LoadAnimation(animId, looped)
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    local humanoid = char:FindFirstChild("Humanoid")
+    if not humanoid then return end
+    
+    if CurrentAnimation and CurrentAnimation.IsPlaying then
+        CurrentAnimation:Stop()
+        CurrentAnimation = nil
+    end
+    
+    local anim = Instance.new("Animation")
+    anim.AnimationId = "rbxassetid://" .. animId
+    
+    local track = humanoid:LoadAnimation(anim)
+    track.Looped = looped or false
+    
+    return track
+end
+
+local function PlayAnimation(animId, looped)
+    local track = LoadAnimation(animId, looped)
+    if track then
+        track:Play()
+        CurrentAnimation = track
+    end
+    return track
+end
+
+local function StopAnimation()
+    if CurrentAnimation and CurrentAnimation.IsPlaying then
+        CurrentAnimation:Stop()
+        CurrentAnimation = nil
+    end
+end
+
+-- Функция воспроизведения звука
+local function PlaySound(soundId, volume)
+    volume = volume or 0.5
+    local sound = Instance.new("Sound")
+    sound.SoundId = "rbxassetid://" .. soundId
+    sound.Volume = volume
+    sound.Parent = workspace
+    sound:Play()
+    Debris:AddItem(sound, 5)
+end
+
+-- Функция создания фантома
+local function CreatePhantom(pos)
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    local phantomFolder = Instance.new("Model")
+    phantomFolder.Parent = workspace
+    phantomFolder.Name = "GreatestHighPhantom"
+    
+    local primary = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("Head")
+    local offset = primary and (primary.Position - pos) or Vector3.new(0,0,0)
+    
+    for _, part in pairs(char:GetChildren()) do
+        if part:IsA("BasePart") and part.Transparency < 1 then
+            local phantom = Instance.new("Part")
+            phantom.Size = part.Size
+            phantom.CFrame = part.CFrame - offset
+            phantom.Name = part.Name
+            phantom.Anchored = true
+            phantom.CanCollide = false
+            phantom.Material = Enum.Material.Neon
+            phantom.Color = Color3.fromRGB(150, 150, 255)
+            phantom.Transparency = 0.3
+            phantom.Parent = phantomFolder
+            
+            local tween = TweenService:Create(phantom, TweenInfo.new(1, Enum.EasingStyle.Linear), {Transparency = 1})
+            tween:Play()
+        end
+    end
+    
+    Debris:AddItem(phantomFolder, 1.1)
+end
+
+-- Функция создания всплывающего GUI
+local function CreateTapGUI()
+    if tapGui then
+        tapGui.Visible = false
+        tapGui:Destroy()
+        tapGui = nil
+    end
+    
+    tapGui = Instance.new("Frame")
+    tapGui.Size = UDim2.new(0, 250, 0, 100)
+    tapGui.Position = UDim2.new(1, -260, 1, -110)
+    tapGui.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    tapGui.BackgroundTransparency = 0.3
+    tapGui.BorderSizePixel = 0
+    tapGui.Visible = false
+    tapGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 10)
+    corner.Parent = tapGui
+    
+    local statusText = Instance.new("TextLabel")
+    statusText.Size = UDim2.new(1, 0, 0.5, 0)
+    statusText.Position = UDim2.new(0, 0, 0, 0)
+    statusText.BackgroundTransparency = 1
+    statusText.Text = ""
+    statusText.TextColor3 = Color3.fromRGB(255, 255, 255)
+    statusText.TextScaled = true
+    statusText.Font = Enum.Font.GothamBold
+    statusText.Parent = tapGui
+    
+    local timerText = Instance.new("TextLabel")
+    timerText.Size = UDim2.new(1, 0, 0.5, 0)
+    timerText.Position = UDim2.new(0, 0, 0.5, 0)
+    timerText.BackgroundTransparency = 1
+    timerText.Text = ""
+    timerText.TextColor3 = Color3.fromRGB(255, 255, 255)
+    timerText.TextScaled = true
+    timerText.Font = Enum.Font.GothamBold
+    timerText.Parent = tapGui
+    
+    return tapGui, statusText, timerText
+end
+
+-- Обновление всплывающего GUI
+local function UpdateTapGUI()
+    if not tapGui then CreateTapGUI() end
+    
+    local statusText = tapGui:FindFirstChildOfClass("TextLabel")
+    local timerText = nil
+    for _, child in pairs(tapGui:GetChildren()) do
+        if child:IsA("TextLabel") and child ~= statusText then
+            timerText = child
+            break
+        end
+    end
+    
+    if not statusText or not timerText then return end
+    
+    if Settings.Frozen then
+        tapGui.Visible = true
+        local timeLeft = math.max(0, Settings.FrozenUntil - tick())
+        statusText.Text = "❌ FROZEN ❌"
+        statusText.TextColor3 = Color3.fromRGB(255, 0, 0)
+        timerText.Text = string.format("%.1fs", timeLeft)
+        timerText.TextColor3 = Color3.fromRGB(255, 0, 0)
+    elseif Settings.DamageStun then
+        tapGui.Visible = true
+        statusText.Text = "💥 STUNNED 💥"
+        statusText.TextColor3 = Color3.fromRGB(255, 165, 0)
+        timerText.Text = "0.7s"
+        timerText.TextColor3 = Color3.fromRGB(255, 165, 0)
+    elseif Settings.BarrageActive then
+        tapGui.Visible = true
+        local timeLeft = math.max(0, Settings.BarrageDuration - Settings.BarrageTime)
+        statusText.Text = "⚡ BARRAGE ⚡"
+        statusText.TextColor3 = Color3.fromRGB(255, 100, 255)
+        timerText.Text = string.format("%.1fs", timeLeft)
+        timerText.TextColor3 = Color3.fromRGB(255, 100, 255)
+    elseif Settings.GreatestHighActive then
+        tapGui.Visible = true
+        statusText.Text = "⚡ GREATEST HIGH ⚡"
+        statusText.TextColor3 = Color3.fromRGB(100, 255, 100)
+        timerText.Text = ""
+    elseif Settings.KillAnimationActive then
+        tapGui.Visible = true
+        statusText.Text = "💀 KILL 💀"
+        statusText.TextColor3 = Color3.fromRGB(255, 0, 0)
+        timerText.Text = ""
+    elseif Settings.CurrentSpeed >= 250 then
+        tapGui.Visible = true
+        statusText.Text = "⚡ MAX SPEED ⚡"
+        statusText.TextColor3 = Color3.fromRGB(0, 255, 255)
+        timerText.Text = ""
+    elseif Settings.CWindowActive then
+        tapGui.Visible = true
+        local timeLeft = math.max(0, Settings.PressWindow - (tick() - Settings.CWindowStart))
+        statusText.Text = "⚡ PRESS C NOW! ⚡"
+        statusText.TextColor3 = Color3.fromRGB(255, 255, 0)
+        timerText.Text = string.format("%.1fs", timeLeft)
+        if timeLeft < 0.15 then
+            timerText.TextColor3 = Color3.fromRGB(255, 0, 0)
+        else
+            timerText.TextColor3 = Color3.fromRGB(255, 255, 0)
+        end
+    elseif Settings.CCooldownActive then
+        tapGui.Visible = true
+        local timeLeft = math.max(0, 2.0 - (tick() - Settings.CWindowStart))
+        statusText.Text = "WAITING"
+        statusText.TextColor3 = Color3.fromRGB(150, 150, 150)
+        timerText.Text = string.format("%.1fs", timeLeft)
+        timerText.TextColor3 = Color3.fromRGB(255, 255, 255)
+    else
+        tapGui.Visible = false
+    end
+end
+
+-- Обновление основного GUI
+local function UpdateMainGUI()
+    if SpeedLabel then
+        SpeedLabel.Text = "SPEED: " .. math.floor(Settings.CurrentSpeed)
+    end
+    
+    if CooldownLabel and Settings.BarrageCooldown > 0 then
+        CooldownLabel.Text = "BARRAGE: " .. string.format("%.1f", Settings.BarrageCooldown) .. "s"
+        CooldownLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+    elseif CooldownLabel then
+        CooldownLabel.Text = "BARRAGE: READY"
+        CooldownLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+    end
+    
+    if GreatestHighLabel and Settings.GreatestHighCooldown > 0 then
+        GreatestHighLabel.Text = "GREATEST: " .. string.format("%.1f", Settings.GreatestHighCooldown) .. "s"
+        GreatestHighLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+    elseif GreatestHighLabel then
+        GreatestHighLabel.Text = "GREATEST: READY"
+        GreatestHighLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+    end
+    
+    if BarrageLabel then
+        BarrageLabel.Text = Settings.BarrageActive and "⚡ BARRAGE ⚡" or ""
+    end
+    
+    if TimerLabel then
+        if Settings.Frozen then
+            local timeLeft = math.max(0, Settings.FrozenUntil - tick())
+            TimerLabel.Text = string.format("FROZEN: %.1fs", timeLeft)
+            TimerLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+        elseif Settings.DamageStun then
+            TimerLabel.Text = "STUNNED"
+            TimerLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
+        elseif Settings.BarrageActive then
+            local timeLeft = math.max(0, Settings.BarrageDuration - Settings.BarrageTime)
+            TimerLabel.Text = string.format("BARRAGE: %.1fs", timeLeft)
+            TimerLabel.TextColor3 = Color3.fromRGB(255, 100, 255)
+        elseif Settings.GreatestHighActive then
+            TimerLabel.Text = "GREATEST HIGH"
+            TimerLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        elseif Settings.KillAnimationActive then
+            TimerLabel.Text = "KILL ANIMATION"
+            TimerLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+        elseif Settings.CurrentSpeed >= 250 then
+            TimerLabel.Text = "MAX SPEED"
+            TimerLabel.TextColor3 = Color3.fromRGB(0, 255, 255)
+        elseif Settings.CWindowActive then
+            local timeLeft = math.max(0, Settings.PressWindow - (tick() - Settings.CWindowStart))
+            TimerLabel.Text = string.format("PRESS C! %.1fs", timeLeft)
+            TimerLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+        elseif Settings.CCooldownActive then
+            local timeLeft = math.max(0, 2.0 - (tick() - Settings.CWindowStart))
+            TimerLabel.Text = string.format("NEXT: %.1fs", timeLeft)
+            TimerLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        else
+            TimerLabel.Text = "AWAITING"
+            TimerLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+        end
+    end
+end
 
 -- Naoya Morph
 local function PerfectNaoyaMorph()
@@ -77,54 +432,26 @@ local function PerfectNaoyaMorph()
     end)
 end
 
--- ПОИСК ЦЕЛИ (ИГРОКИ + NPC)
-local function GetClosestTarget()
+-- ПОИСК ЦЕЛИ
+local function GetClosestPlayer()
     local closest = nil
     local shortestDist = math.huge
     local center = Camera.ViewportSize / 2
+    local myRoot = LocalPlayer.Character and (LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or LocalPlayer.Character:FindFirstChild("Torso") or LocalPlayer.Character:FindFirstChild("Head"))
     
-    -- ПОИСК ИГРОКОВ
     for _, v in pairs(Players:GetPlayers()) do
         if v ~= LocalPlayer and v.Character then
             local humanoid = v.Character:FindFirstChild("Humanoid")
             if humanoid and humanoid.Health > 0 then
                 local part = v.Character:FindFirstChild("HumanoidRootPart") or v.Character:FindFirstChild("Torso") or v.Character:FindFirstChild("Head")
-                if part then
-                    local pos, onScreen = Camera:WorldToViewportPoint(part.Position)
-                    if onScreen then
-                        local dist = (Vector2.new(pos.X, pos.Y) - center).magnitude
-                        if dist < shortestDist then
-                            closest = v.Character
-                            shortestDist = dist
-                        end
-                    end
-                end
-            end
-        end
-    end
-    
-    -- ПОИСК NPC (все модели с Humanoid)
-    for _, v in pairs(workspace:GetDescendants()) do
-        if v:IsA("Model") and v ~= LocalPlayer.Character then
-            local humanoid = v:FindFirstChild("Humanoid")
-            if humanoid and humanoid.Health > 0 then
-                -- Проверяем что это не игрок
-                local isPlayer = false
-                for _, player in pairs(Players:GetPlayers()) do
-                    if player.Character == v then
-                        isPlayer = true
-                        break
-                    end
-                end
-                
-                if not isPlayer then
-                    local part = v:FindFirstChild("HumanoidRootPart") or v:FindFirstChild("Torso") or v:FindFirstChild("Head") or v:FindFirstChild("UpperTorso")
-                    if part then
+                if part and myRoot then
+                    local worldDist = (myRoot.Position - part.Position).Magnitude
+                    if worldDist <= Settings.AimRadius then
                         local pos, onScreen = Camera:WorldToViewportPoint(part.Position)
                         if onScreen then
                             local dist = (Vector2.new(pos.X, pos.Y) - center).magnitude
                             if dist < shortestDist then
-                                closest = v
+                                closest = v.Character
                                 shortestDist = dist
                             end
                         end
@@ -137,32 +464,134 @@ local function GetClosestTarget()
     return closest
 end
 
--- ГЛАВНЫЙ ЦИКЛ АИМА
+-- Проверка жива ли цель
+local function IsTargetAlive(target)
+    if not target then return false end
+    local humanoid = target:FindFirstChild("Humanoid")
+    return humanoid and humanoid.Health > 0
+end
+
+-- BARRAGE (X)
+local function StartBarrage()
+    if Settings.BarrageActive then return end
+    if Settings.BarrageCooldown > 0 then return end
+    if Settings.CurrentSpeed < 100 then return end
+    
+    local target = Settings.CurrentTarget or GetClosestPlayer()
+    if not target or not IsTargetAlive(target) then return end
+    
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("Head")
+    local targetRoot = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChild("Torso") or target:FindFirstChild("Head")
+    
+    if not root or not targetRoot then return end
+    
+    local distance = (root.Position - targetRoot.Position).Magnitude
+    if distance > 15 then return end
+    
+    Settings.BarrageActive = true
+    Settings.BarrageTarget = target
+    Settings.BarrageSpeed = Settings.CurrentSpeed
+    Settings.BarrageTime = 0
+    Settings.BarrageCooldown = Settings.BarrageCooldownDuration
+    
+    Settings.CWindowActive = false
+    Settings.CCooldownActive = false
+    
+    PlaySound("139820826725306", 0.5)
+    SetScreenEffect(0.5)
+    
+    -- АНИМАЦИЯ X СКИЛЛА
+    PlayAnimation("129678103897608", true)
+    
+    Settings.stunned = false
+end
+
+-- GREATEST HIGH (Z)
+local function StartGreatestHigh()
+    if Settings.GreatestHighActive then return end
+    if Settings.GreatestHighCooldown > 0 then return end
+    if not Settings.NaoyaEnabled then return end
+    if Settings.CurrentSpeed > 50 then return end
+
+    local target = Settings.CurrentTarget or GetClosestPlayer()
+    if not target or not IsTargetAlive(target) then return end
+
+    local char = LocalPlayer.Character
+    if not char then return end
+
+    local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("Head")
+    local targetRoot = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChild("Torso") or target:FindFirstChild("Head")
+
+    if not root or not targetRoot then return end
+
+    local distance = (root.Position - targetRoot.Position).Magnitude
+    if distance > Settings.GreatestHighRange then return end
+
+    Settings.GreatestHighActive = true
+    Settings.GreatestHighCooldown = Settings.GreatestHighCooldownDuration
+    Settings.CCooldownActive = false
+    Settings.CWindowActive = false
+
+    CreatePhantom(root.Position)
+
+    PlaySound("75138797742324", 0.5)
+    SetScreenEffect(0.5)
+    
+    PlayAnimation("120914276661831", false)
+
+    local look = targetRoot.CFrame.LookVector
+    local behind = targetRoot.Position - (look * 3)
+    root.CFrame = CFrame.new(behind, targetRoot.Position)
+
+    task.delay(0.3, function()
+        if root and root.Parent and targetRoot and targetRoot.Parent then
+            CreatePhantom(root.Position)
+            
+            local front = targetRoot.Position + (look * 3)
+            root.CFrame = CFrame.new(front, targetRoot.Position)
+            
+            task.delay(0.1, function()
+                if root and root.Parent then
+                    CreatePhantom(front)
+                end
+            end)
+        end
+        Settings.GreatestHighActive = false
+        SetScreenEffect(0)
+    end)
+end
+
+-- Сброс скорости
+local function ResetSpeed()
+    Settings.SpeedBoostActive = false
+    Settings.CurrentSpeed = 25
+    Settings.NextTargetSpeed = 0
+    Settings.JustStarted = false
+    Settings.CWindowActive = false
+    Settings.CCooldownActive = false
+    Settings.SpeedLevel = 1
+    Settings.TimingActive = false
+    SetScreenEffect(0)
+end
+
+-- АИМ
 RunService.RenderStepped:Connect(function()
     if Settings.AimbotEnabled then
-        -- Если цели нет - ищем
-        if not Settings.Target then
-            Settings.Target = GetClosestTarget()
-            if Settings.Target then
-                print("Цель найдена:", Settings.Target.Name or "NPC")
+        local target = GetClosestPlayer()
+        if target then
+            Settings.CurrentTarget = target
+            local part = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChild("Torso") or target:FindFirstChild("Head")
+            if part then
+                Camera.CFrame = CFrame.new(Camera.CFrame.Position, part.Position)
             end
+        else
+            Settings.CurrentTarget = nil
         end
-        
-        -- Если цель есть - проверяем жива ли и наводимся
-        if Settings.Target then
-            local humanoid = Settings.Target:FindFirstChild("Humanoid")
-            if humanoid and humanoid.Health > 0 then
-                local part = Settings.Target:FindFirstChild("HumanoidRootPart") or 
-                            Settings.Target:FindFirstChild("Torso") or 
-                            Settings.Target:FindFirstChild("Head") or 
-                            Settings.Target:FindFirstChild("UpperTorso")
-                if part then
-                    Camera.CFrame = CFrame.new(Camera.CFrame.Position, part.Position)
-                end
-            else
-                Settings.Target = nil -- цель мертва, сбрасываем
-            end
-        end
+    else
+        Settings.CurrentTarget = nil
     end
 end)
 
@@ -171,24 +600,120 @@ UserInputService.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.KeyCode == Enum.KeyCode.E then
         Settings.AimbotEnabled = not Settings.AimbotEnabled
-        if Settings.AimbotEnabled then
-            Settings.Target = GetClosestTarget()
-            if Settings.Target then
-                print("Аим включен, цель:", Settings.Target.Name or "NPC")
-            else
-                print("Аим включен, целей нет")
+        if not Settings.AimbotEnabled then
+            Settings.CurrentTarget = nil
+        end
+    elseif input.KeyCode == Enum.KeyCode.X and Settings.NaoyaEnabled then
+        StartBarrage()
+    elseif input.KeyCode == Enum.KeyCode.Z and Settings.NaoyaEnabled then
+        StartGreatestHigh()
+    elseif input.KeyCode == Enum.KeyCode.C and Settings.NaoyaEnabled and not Settings.Frozen and not Settings.BarrageActive and not Settings.GreatestHighActive and not Settings.DamageStun and not Settings.KillAnimationActive then
+        if Settings.CurrentSpeed >= 250 then return end
+        
+        if Settings.CWindowActive then
+            PlaySound("134671704261165", 0.5)
+            
+            if Settings.SpeedLevel < 6 then
+                Settings.SpeedLevel = Settings.SpeedLevel + 1
+                Settings.NextTargetSpeed = Settings.SpeedValues[Settings.SpeedLevel]
             end
+            
+            Settings.SpeedBoostActive = true
+            Settings.CWindowActive = false
+            Settings.CCooldownActive = true
+            Settings.CWindowStart = tick()
+            
+            if Settings.SpeedLevel == 2 then SetScreenEffect(0.2)
+            elseif Settings.SpeedLevel == 3 then SetScreenEffect(0.3)
+            elseif Settings.SpeedLevel == 4 then SetScreenEffect(0.4)
+            elseif Settings.SpeedLevel == 5 then SetScreenEffect(0.45)
+            elseif Settings.SpeedLevel == 6 then SetScreenEffect(0.5)
+            end
+            
+        elseif Settings.CurrentSpeed <= 26 and not Settings.SpeedBoostActive then
+            PlaySound("134671704261165", 0.5)
+            
+            Settings.SpeedBoostActive = true
+            Settings.SpeedLevel = 2
+            Settings.NextTargetSpeed = 40
+            Settings.CCooldownActive = true
+            Settings.CWindowStart = tick()
+            
+            SetScreenEffect(0.2)
         else
-            Settings.Target = nil
-            print("Аим выключен")
+            PlaySound("82433875401352", 0.5)
+            
+            local char = LocalPlayer.Character
+            if char then
+                for _, part in pairs(char:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        part.Anchored = true
+                        table.insert(Settings.FrozenParts, part)
+                    end
+                end
+                local humanoid = char:FindFirstChild("Humanoid")
+                if humanoid then
+                    humanoid.WalkSpeed = 0
+                    humanoid.JumpPower = 0
+                    humanoid.AutoRotate = false
+                    humanoid.PlatformStand = true
+                end
+            end
+            
+            Settings.Frozen = true
+            Settings.FrozenUntil = tick() + 1.0
+            ResetSpeed()
+            SetScreenEffect(0)
         end
     end
 end)
 
--- НОРМАЛЬНЫЙ РАЗГОН
+-- Обработка смерти персонажа
+local characterConnections = {}
+
+local function setupCharacter(char)
+    if not char then return end
+    
+    task.wait(1)
+    
+    if not CheckUltimateName() then
+        KillScript()
+        return
+    end
+    
+    for _, conn in pairs(characterConnections) do
+        conn:Disconnect()
+    end
+    characterConnections = {}
+    
+    local humanoid = char:FindFirstChild("Humanoid")
+    if humanoid then
+        local conn = humanoid.HealthChanged:Connect(function(health)
+            if health <= 0 then
+                PlaySound("127130418218342", 0.5)
+            end
+        end)
+        table.insert(characterConnections, conn)
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(function(newChar)
+    setupCharacter(newChar)
+    task.wait(1)
+    if Settings.NaoyaEnabled then
+        PerfectNaoyaMorph()
+    end
+end)
+
+if LocalPlayer.Character then
+    setupCharacter(LocalPlayer.Character)
+end
+
+-- ОСНОВНОЙ ЦИКЛ
 RunService.Heartbeat:Connect(function()
     local dt = tick() - lastTime
     lastTime = tick()
+    local currentTime = tick()
     
     local char = LocalPlayer.Character
     if not char then return end
@@ -196,38 +721,184 @@ RunService.Heartbeat:Connect(function()
     local humanoid = char:FindFirstChild("Humanoid")
     if not humanoid then return end
     
-    local root = char:FindFirstChild("HumanoidRootPart")
+    local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("Head")
     if not root then return end
     
-    -- Проверка движения
-    if not lastPosition then
-        lastPosition = root.Position
+    UpdateMainGUI()
+    UpdateTapGUI()
+    
+    if Settings.Frozen then
+        if currentTime >= Settings.FrozenUntil then
+            for _, part in pairs(Settings.FrozenParts) do
+                if part and part.Parent then
+                    part.Anchored = false
+                end
+            end
+            Settings.FrozenParts = {}
+            
+            if humanoid then
+                humanoid.WalkSpeed = 25
+                humanoid.JumpPower = 50
+                humanoid.AutoRotate = true
+                humanoid.PlatformStand = false
+            end
+            
+            Settings.Frozen = false
+            Settings.CurrentSpeed = 25
+        end
         return
     end
     
-    local moved = (root.Position - lastPosition).magnitude > 0.1
-    lastPosition = root.Position
+    if Settings.DamageStun then
+        humanoid.WalkSpeed = 0
+        return
+    end
     
-    -- FRAME логика
-    if Settings.FrameEnabled then
-        if moved then
-            Settings.Acceleration = Settings.Acceleration + (dt * ACCEL_RATE)
-            Settings.CurrentSpeed = math.min(Settings.MAX_SPEED, 25 + Settings.Acceleration)
-        else
-            Settings.Acceleration = 0
-            Settings.CurrentSpeed = 25
-        end
-    else
+    if not Settings.NaoyaEnabled then
         Settings.CurrentSpeed = 25
-        Settings.Acceleration = 0
+        humanoid.WalkSpeed = 25
+        return
+    end
+    
+    if Settings.BarrageCooldown > 0 then
+        Settings.BarrageCooldown = Settings.BarrageCooldown - dt
+    end
+    if Settings.GreatestHighCooldown > 0 then
+        Settings.GreatestHighCooldown = Settings.GreatestHighCooldown - dt
+    end
+    
+    -- БАРРАЖ
+    if Settings.BarrageActive and Settings.BarrageTarget then
+        local targetRoot = Settings.BarrageTarget:FindFirstChild("HumanoidRootPart") or Settings.BarrageTarget:FindFirstChild("Torso") or Settings.BarrageTarget:FindFirstChild("Head")
+        if targetRoot then
+            local targetHumanoid = Settings.BarrageTarget:FindFirstChild("Humanoid")
+            if targetHumanoid and targetHumanoid.Health > 0 then
+                Settings.BarrageTime = Settings.BarrageTime + dt
+                
+                if Settings.BarrageTime >= Settings.BarrageDuration then
+                    Settings.BarrageActive = false
+                    Settings.BarrageTarget = nil
+                    Settings.CCooldownActive = true
+                    Settings.CWindowStart = currentTime
+                    SetScreenEffect(0)
+                    StopAnimation()
+                else
+                    local angle = (tick() * (Settings.BarrageSpeed / 8)) % (2 * math.pi)
+                    local offset = Vector3.new(math.cos(angle) * Settings.BarrageDistance, 0, math.sin(angle) * Settings.BarrageDistance)
+                    root.CFrame = CFrame.new(targetRoot.Position + offset, targetRoot.Position)
+                    humanoid.WalkSpeed = 0
+                end
+            else
+                -- ЦЕЛЬ УМЕРЛА
+                PlaySound("126745072633218", 0.5)
+                
+                -- ОСТАНАВЛИВАЕМ X АНИМАЦИЮ
+                StopAnimation()
+                SetScreenEffect(0)
+                
+                -- ЖДЕМ 0.5 СЕКУНДЫ И ЗАПУСКАЕМ КИЛЛ АНИМАЦИЮ
+                task.delay(0.5, function()
+                    if not Settings.BarrageActive then
+                        Settings.KillAnimationActive = true
+                        local killAnim = PlayAnimation("83842514475555", false)
+                        
+                        -- СБИВАЕМ ДВИЖЕНИЕМ КАК БЫЛО
+                        if KillAnimationConn then KillAnimationConn:Disconnect() end
+                        
+                        KillAnimationConn = RunService.Heartbeat:Connect(function()
+                            local vel = root.Velocity.Magnitude
+                            if vel > 0.5 then
+                                Settings.KillAnimationActive = false
+                                StopAnimation()
+                                if KillAnimationConn then
+                                    KillAnimationConn:Disconnect()
+                                    KillAnimationConn = nil
+                                end
+                            end
+                        end)
+                        
+                        task.delay(2, function()
+                            Settings.KillAnimationActive = false
+                            if KillAnimationConn then
+                                KillAnimationConn:Disconnect()
+                                KillAnimationConn = nil
+                            end
+                        end)
+                    end
+                end)
+                
+                Settings.BarrageActive = false
+                Settings.BarrageTarget = nil
+                Settings.CCooldownActive = true
+                Settings.CWindowStart = currentTime
+            end
+        else
+            Settings.BarrageActive = false
+            Settings.BarrageTarget = nil
+            Settings.CCooldownActive = true
+            Settings.CWindowStart = currentTime
+            SetScreenEffect(0)
+            StopAnimation()
+        end
+        return
+    end
+    
+    -- ПРОВЕРКА НАПРАВЛЕНИЯ
+    local velocity = root.Velocity
+    local lookVector = root.CFrame.LookVector
+    local velocityDir = velocity.Magnitude > 0.1 and velocity.Unit or Vector3.new(0,0,0)
+    local dotProduct = velocity.Magnitude > 0.1 and lookVector:Dot(velocityDir) or 0
+    
+    if velocity.Magnitude > 1 and dotProduct < -0.3 then
+        ResetSpeed()
+        Settings.CWindowActive = false
+        Settings.CCooldownActive = false
+        SetScreenEffect(0)
+    end
+    
+    local isMoving = velocity.Magnitude > 0.5
+    
+    if Settings.SpeedBoostActive then
+        Settings.CurrentSpeed = math.min(Settings.CurrentSpeed + ACCEL_RATE * dt, Settings.NextTargetSpeed)
+        
+        if Settings.CurrentSpeed < 250 then
+            if Settings.CCooldownActive then
+                if currentTime - Settings.CWindowStart >= 2.0 then
+                    Settings.CWindowActive = true
+                    Settings.CCooldownActive = false
+                    Settings.CWindowStart = currentTime
+                end
+            elseif Settings.CWindowActive then
+                if currentTime - Settings.CWindowStart >= Settings.PressWindow then
+                    ResetSpeed()
+                    Settings.CWindowActive = false
+                    SetScreenEffect(0)
+                end
+            elseif not Settings.CCooldownActive and not Settings.CWindowActive then
+                Settings.CCooldownActive = true
+                Settings.CWindowStart = currentTime
+            end
+        else
+            Settings.CWindowActive = false
+            Settings.CCooldownActive = false
+        end
+    end
+    
+    if not isMoving then
+        if Settings.CurrentSpeed > 25 then
+            ResetSpeed()
+            SetScreenEffect(0)
+        end
+    elseif not Settings.SpeedBoostActive and Settings.CurrentSpeed > 25 then
+        Settings.CurrentSpeed = math.max(Settings.CurrentSpeed - DECEL_RATE * dt, 25)
     end
     
     humanoid.WalkSpeed = Settings.CurrentSpeed
 end)
 
--- Фантомы
+-- ФАНТОМЫ
 local function CreateGhost()
-    if Settings.CurrentSpeed < 50 then return end
+    if Settings.CurrentSpeed < 26 then return end
     
     local char = LocalPlayer.Character
     if not char then return end
@@ -238,30 +909,22 @@ local function CreateGhost()
     
     for _, part in pairs(char:GetChildren()) do
         if part:IsA("BasePart") and part.Transparency < 1 then
-            local ghost
-            
-            if part.Name == "Head" then
-                ghost = Instance.new("Part")
-                ghost.Size = Vector3.new(1.2, 1.2, 1.2)
-                ghost.CFrame = part.CFrame
-                ghost.Name = "CylinderHead"
-                local mesh = Instance.new("SpecialMesh", ghost)
-                mesh.MeshType = Enum.MeshType.Cylinder
-            else
-                ghost = Instance.new("Part")
-                ghost.Size = part.Size
-                ghost.CFrame = part.CFrame
-                ghost.Name = part.Name
-            end
-            
+            local ghost = Instance.new("Part")
+            ghost.Size = part.Size
+            ghost.CFrame = part.CFrame
+            ghost.Name = part.Name
             ghost.Anchored = true
             ghost.CanCollide = false
             ghost.Material = Enum.Material.Neon
             ghost.Color = Color3.fromRGB(150, 150, 255)
             ghost.Transparency = 0.3
             ghost.Parent = ghostFolder
-            
-            local tween = TweenService:Create(ghost, TweenInfo.new(1), {Transparency = 1})
+        end
+    end
+    
+    for _, part in pairs(ghostFolder:GetChildren()) do
+        if part:IsA("BasePart") then
+            local tween = TweenService:Create(part, TweenInfo.new(1), {Transparency = 1})
             tween:Play()
         end
     end
@@ -269,18 +932,20 @@ local function CreateGhost()
     Debris:AddItem(ghostFolder, 1.1)
 end
 
--- Цикл фантомов
+-- ЦИКЛ ФАНТОМОВ
 task.spawn(function()
     while true do
-        if Settings.FreestyleEnabled then
+        if Settings.NaoyaEnabled and Settings.FrameEnabled then
             local speed = Settings.CurrentSpeed
             local waitTime = 0.2
             
             if speed >= 200 then
+                waitTime = 0.02
+            elseif speed >= 150 then
                 waitTime = 0.05
             elseif speed >= 100 then
                 waitTime = 0.1
-            elseif speed >= 50 then
+            elseif speed >= 26 then
                 waitTime = 0.2
             else
                 task.wait(0.2)
@@ -295,23 +960,15 @@ task.spawn(function()
     end
 end)
 
--- Naoya после смерти
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(1)
-    if Settings.NaoyaEnabled then
-        PerfectNaoyaMorph()
-    end
-end)
-
--- GUI
+-- ОСНОВНОЕ GUI
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 ScreenGui.Name = "FreestyleGUI"
 ScreenGui.ResetOnSpawn = false
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 200, 0, 160)
-MainFrame.Position = UDim2.new(0, 10, 0.5, -80)
+MainFrame.Size = UDim2.new(0, 340, 0, 250)
+MainFrame.Position = UDim2.new(0, 10, 0.5, -125)
 MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 MainFrame.Active = true
 MainFrame.Draggable = true
@@ -324,7 +981,7 @@ UICorner.Parent = MainFrame
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, 0, 0, 30)
 Title.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-Title.Text = "FREESTYLE v5.0"
+Title.Text = "TRUE HEAD OF THE HEI"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.Font = Enum.Font.GothamBold
 Title.TextSize = 14
@@ -341,47 +998,88 @@ CloseBtn.TextSize = 12
 CloseBtn.Parent = Title
 CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
 
-local yPos = 35
+local NaoyaBtn = Instance.new("TextButton")
+NaoyaBtn.Size = UDim2.new(0.9, 0, 0, 30)
+NaoyaBtn.Position = UDim2.new(0.05, 0, 0, 35)
+NaoyaBtn.BackgroundColor3 = Settings.NaoyaEnabled and Color3.fromRGB(0, 200, 0) or Color3.fromRGB(50, 50, 50)
+NaoyaBtn.Text = "Naoya: " .. (Settings.NaoyaEnabled and "ON" or "OFF")
+NaoyaBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+NaoyaBtn.Font = Enum.Font.Gotham
+NaoyaBtn.TextSize = 14
+NaoyaBtn.Parent = MainFrame
+NaoyaBtn.MouseButton1Click:Connect(function()
+    Settings.NaoyaEnabled = not Settings.NaoyaEnabled
+    Settings.FrameEnabled = Settings.NaoyaEnabled
+    NaoyaBtn.BackgroundColor3 = Settings.NaoyaEnabled and Color3.fromRGB(0, 200, 0) or Color3.fromRGB(50, 50, 50)
+    NaoyaBtn.Text = "Naoya: " .. (Settings.NaoyaEnabled and "ON" or "OFF")
+    if Settings.NaoyaEnabled then
+        PerfectNaoyaMorph()
+    end
+end)
 
-local function CreateButton(text, y, var, callback)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.9, 0, 0, 25)
-    btn.Position = UDim2.new(0.05, 0, 0, y)
-    btn.BackgroundColor3 = Settings[var] and Color3.fromRGB(0, 200, 0) or Color3.fromRGB(50, 50, 50)
-    btn.Text = text .. ": " .. (Settings[var] and "ON" or "OFF")
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Font = Enum.Font.Gotham
-    btn.TextSize = 12
-    btn.Parent = MainFrame
-    btn.MouseButton1Click:Connect(function()
-        Settings[var] = not Settings[var]
-        btn.BackgroundColor3 = Settings[var] and Color3.fromRGB(0, 200, 0) or Color3.fromRGB(50, 50, 50)
-        btn.Text = text .. ": " .. (Settings[var] and "ON" or "OFF")
-        if var == "NaoyaEnabled" and Settings[var] then
-            PerfectNaoyaMorph()
-        end
-    end)
-end
+SpeedLabel = Instance.new("TextLabel")
+SpeedLabel.Size = UDim2.new(0.9, 0, 0, 30)
+SpeedLabel.Position = UDim2.new(0.05, 0, 0, 70)
+SpeedLabel.BackgroundTransparency = 1
+SpeedLabel.Text = "SPEED: 25"
+SpeedLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
+SpeedLabel.Font = Enum.Font.GothamBold
+SpeedLabel.TextSize = 14
+SpeedLabel.Parent = MainFrame
 
-CreateButton("Freestyle", yPos, "FreestyleEnabled")
-yPos = yPos + 30
-CreateButton("Naoya", yPos, "NaoyaEnabled")
-yPos = yPos + 30
-CreateButton("Frame", yPos, "FrameEnabled")
+TimerLabel = Instance.new("TextLabel")
+TimerLabel.Size = UDim2.new(0.9, 0, 0, 20)
+TimerLabel.Position = UDim2.new(0.05, 0, 0, 100)
+TimerLabel.BackgroundTransparency = 1
+TimerLabel.Text = "AWAITING"
+TimerLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+TimerLabel.Font = Enum.Font.Gotham
+TimerLabel.TextSize = 12
+TimerLabel.Parent = MainFrame
 
--- Инфо
+CooldownLabel = Instance.new("TextLabel")
+CooldownLabel.Size = UDim2.new(0.9, 0, 0, 20)
+CooldownLabel.Position = UDim2.new(0.05, 0, 0, 120)
+CooldownLabel.BackgroundTransparency = 1
+CooldownLabel.Text = "BARRAGE: READY"
+CooldownLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+CooldownLabel.Font = Enum.Font.Gotham
+CooldownLabel.TextSize = 12
+CooldownLabel.Parent = MainFrame
+
+GreatestHighLabel = Instance.new("TextLabel")
+GreatestHighLabel.Size = UDim2.new(0.9, 0, 0, 20)
+GreatestHighLabel.Position = UDim2.new(0.05, 0, 0, 140)
+GreatestHighLabel.BackgroundTransparency = 1
+GreatestHighLabel.Text = "GREATEST: READY"
+GreatestHighLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+GreatestHighLabel.Font = Enum.Font.Gotham
+GreatestHighLabel.TextSize = 12
+GreatestHighLabel.Parent = MainFrame
+
+BarrageLabel = Instance.new("TextLabel")
+BarrageLabel.Size = UDim2.new(0.9, 0, 0, 20)
+BarrageLabel.Position = UDim2.new(0.05, 0, 0, 160)
+BarrageLabel.BackgroundTransparency = 1
+BarrageLabel.Text = ""
+BarrageLabel.TextColor3 = Color3.fromRGB(255, 100, 255)
+BarrageLabel.Font = Enum.Font.Gotham
+BarrageLabel.TextSize = 12
+BarrageLabel.Parent = MainFrame
+
 local Info = Instance.new("TextLabel")
-Info.Size = UDim2.new(0.9, 0, 0, 40)
-Info.Position = UDim2.new(0.05, 0, 0, yPos + 30)
+Info.Size = UDim2.new(0.9, 0, 0, 70)
+Info.Position = UDim2.new(0.05, 0, 0, 180)
 Info.BackgroundTransparency = 1
-Info.Text = "E - Аим (NPC + игроки)\nFrame: разгон до 300\n50+=0.2c 100+=0.1c 200+=0.05c"
+Info.Text = "C - ускорение\nX - BARRAGE\nZ - GREATEST HIGH"
 Info.TextColor3 = Color3.fromRGB(150, 150, 150)
 Info.TextXAlignment = Enum.TextXAlignment.Left
 Info.Font = Enum.Font.Gotham
-Info.TextSize = 11
+Info.TextSize = 9
 Info.Parent = MainFrame
 
--- RightControl скрытие
+CreateTapGUI()
+
 UserInputService.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.KeyCode == Enum.KeyCode.RightControl then
@@ -389,4 +1087,4 @@ UserInputService.InputBegan:Connect(function(input, gp)
     end
 end)
 
-print("=== FREESTYLE ===")
+print("TRUE HEAD OF THE HEI")
