@@ -11,6 +11,7 @@ local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
+local Mouse = LocalPlayer:GetMouse()
 
 -- Функция проверки названия ульты
 local function CheckUltimateName()
@@ -67,7 +68,7 @@ local Settings = {
     GreatestHighTarget = nil,
     GreatestHighCooldown = 0,
     GreatestHighCooldownDuration = 30,
-    GreatestHighRange = 20,
+    GreatestHighRange = 30, -- ИЗМЕНЕНО НА 30
     GreatestHighActive = false,
     TimingActive = false,
     TimingStartTime = 0,
@@ -101,7 +102,10 @@ local Settings = {
     BloodlustKnifeDuration = 0,
     BloodlustCooldown = 0,
     BloodlustCooldownDuration = 45,
-    BloodlustBuffActive = false -- true = удачный каунтер (25 сек), false = неудачный (15 сек)
+    BloodlustBuffActive = false, -- true = удачный каунтер (25 сек), false = неудачный (15 сек)
+    -- Aim lock
+    LockedTarget = nil,
+    LockedTargetChar = nil
 }
 
 -- Переменные
@@ -116,8 +120,6 @@ local BarrageLabel = nil
 local GreatestHighLabel = nil
 local TimerLabel = nil
 local BloodlustLabel = nil
-
--- Для отслеживания получения урона
 local lastHealth = 100
 
 -- ===== ЭФФЕКТ ЭКРАНА =====
@@ -452,27 +454,56 @@ local function PerfectNaoyaMorph()
     end)
 end
 
--- ПОИСК ЦЕЛИ
-local function GetClosestPlayer()
-    local closest = nil
-    local shortestDist = math.huge
-    local center = Camera.ViewportSize / 2
-    local myRoot = LocalPlayer.Character and (LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or LocalPlayer.Character:FindFirstChild("Torso") or LocalPlayer.Character:FindFirstChild("Head"))
+-- ПОИСК ЦЕЛИ - ЖЕСТКАЯ БЛОКИРОВКА
+local lockedTarget = nil
+local lockedTargetChar = nil
 
+local function GetClosestPlayerToMouse()
+    local myRoot = LocalPlayer.Character and (LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or LocalPlayer.Character:FindFirstChild("Torso") or LocalPlayer.Character:FindFirstChild("Head"))
+    if not myRoot then return nil end
+    
+    -- ЕСЛИ ЕСТЬ ЗАБЛОКИРОВАННАЯ ЦЕЛЬ
+    if lockedTargetChar then
+        local targetChar = lockedTargetChar
+        if targetChar and targetChar.Parent then
+            local humanoid = targetChar:FindFirstChild("Humanoid")
+            local part = targetChar:FindFirstChild("HumanoidRootPart") or targetChar:FindFirstChild("Torso") or targetChar:FindFirstChild("Head")
+            
+            if humanoid and humanoid.Health > 0 and part then
+                local worldDist = (myRoot.Position - part.Position).Magnitude
+                if worldDist <= Settings.AimRadius then
+                    local pos, onScreen = Camera:WorldToViewportPoint(part.Position)
+                    if onScreen then
+                        -- ЖЕСТКО ДЕРЖИМ ЦЕЛЬ
+                        return targetChar
+                    end
+                end
+            end
+        end
+        -- Цель умерла или ушла - сбрасываем
+        lockedTargetChar = nil
+        lockedTarget = nil
+    end
+    
+    -- ИЩЕМ НОВУЮ ЦЕЛЬ (только если нет заблокированной)
+    local mousePos = Vector2.new(Mouse.X, Mouse.Y)
+    local closest = nil
+    local closestDist = math.huge
+    
     for _, v in pairs(Players:GetPlayers()) do
         if v ~= LocalPlayer and v.Character then
             local humanoid = v.Character:FindFirstChild("Humanoid")
             if humanoid and humanoid.Health > 0 then
                 local part = v.Character:FindFirstChild("HumanoidRootPart") or v.Character:FindFirstChild("Torso") or v.Character:FindFirstChild("Head")
-                if part and myRoot then
+                if part then
                     local worldDist = (myRoot.Position - part.Position).Magnitude
                     if worldDist <= Settings.AimRadius then
                         local pos, onScreen = Camera:WorldToViewportPoint(part.Position)
                         if onScreen then
-                            local dist = (Vector2.new(pos.X, pos.Y) - center).magnitude
-                            if dist < shortestDist then
+                            local distToMouse = (Vector2.new(pos.X, pos.Y) - mousePos).Magnitude
+                            if distToMouse < closestDist then
+                                closestDist = distToMouse
                                 closest = v.Character
-                                shortestDist = dist
                             end
                         end
                     end
@@ -480,8 +511,15 @@ local function GetClosestPlayer()
             end
         end
     end
-
-    return closest
+    
+    -- БЛОКИРУЕМ НАЙДЕННУЮ ЦЕЛЬ
+    if closest then
+        lockedTargetChar = closest
+        lockedTarget = Players:GetPlayerFromCharacter(closest)
+        return closest
+    end
+    
+    return nil
 end
 
 -- Проверка жива ли цель
@@ -496,9 +534,9 @@ local function StartBarrage()
     if Settings.BarrageActive then return end
     if Settings.BarrageCooldown > 0 then return end
     if Settings.CurrentSpeed < 100 then return end
-    if Settings.BloodlustAnimationActive then return end -- Блокируем во время V
+    if Settings.BloodlustAnimationActive then return end
 
-    local target = Settings.CurrentTarget or GetClosestPlayer()
+    local target = Settings.CurrentTarget or GetClosestPlayerToMouse()
     if not target or not IsTargetAlive(target) then return end
 
     local char = LocalPlayer.Character
@@ -529,15 +567,15 @@ local function StartBarrage()
     Settings.stunned = false
 end
 
--- GREATEST HIGH (Z)
+-- GREATEST HIGH (Z) С РАДИУСОМ 30
 local function StartGreatestHigh()
     if Settings.GreatestHighActive then return end
     if Settings.GreatestHighCooldown > 0 then return end
     if not Settings.NaoyaEnabled then return end
     if Settings.CurrentSpeed > 50 then return end
-    if Settings.BloodlustAnimationActive then return end -- Блокируем во время V
+    if Settings.BloodlustAnimationActive then return end
 
-    local target = Settings.CurrentTarget or GetClosestPlayer()
+    local target = Settings.CurrentTarget or GetClosestPlayerToMouse()
     if not target or not IsTargetAlive(target) then return end
 
     local char = LocalPlayer.Character
@@ -549,7 +587,7 @@ local function StartGreatestHigh()
     if not root or not targetRoot then return end
 
     local distance = (root.Position - targetRoot.Position).Magnitude
-    if distance > Settings.GreatestHighRange then return end
+    if distance > Settings.GreatestHighRange then return end -- Теперь 30
 
     Settings.GreatestHighActive = true
     Settings.GreatestHighCooldown = Settings.GreatestHighCooldownDuration
@@ -843,7 +881,6 @@ local function removeBloodlustKnife()
         end)
     end
 
-    -- Возвращаем обычную гравитацию
     workspace.Gravity = 196
 end
 
@@ -892,7 +929,7 @@ local function createBloodlustKnife(duration, withBuff)
     Settings.BloodlustKnifeActive = true
     Settings.BloodlustKnifeStartTime = tick()
     Settings.BloodlustKnifeDuration = duration
-    Settings.BloodlustBuffActive = withBuff  -- true = удачный (25 сек), false = неудачный (15 сек)
+    Settings.BloodlustBuffActive = withBuff
 
     local tool = BloodlustKnifeModel:FindFirstChildOfClass("Tool")
     if tool then
@@ -956,7 +993,6 @@ local function setupBloodlustCounter()
             PlaySound("96188091140381", 0.5)
             Settings.BloodlustAnimationActive = false
             StopAnimation()
-            -- НЕУДАЧНЫЙ КАУНТЕР: withBuff = false
             createBloodlustKnife(15, false)
             Settings.BloodlustCooldown = Settings.BloodlustCooldownDuration
         end
@@ -1001,7 +1037,6 @@ local function setupBloodlustCounter()
                 teleportBehindAttacker(attacker)
             end
 
-            -- УДАЧНЫЙ КАУНТЕР: withBuff = true
             createBloodlustKnife(25, true)
             Settings.BloodlustCooldown = Settings.BloodlustCooldownDuration
         end
@@ -1034,10 +1069,10 @@ local function StartBloodlust()
 end
 -- ======================================================
 
--- АИМ
+-- АИМ С ЖЕСТКОЙ БЛОКИРОВКОЙ
 RunService.RenderStepped:Connect(function()
     if Settings.AimbotEnabled then
-        local target = GetClosestPlayer()
+        local target = GetClosestPlayerToMouse()
         if target then
             Settings.CurrentTarget = target
             local part = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChild("Torso") or target:FindFirstChild("Head")
@@ -1046,9 +1081,13 @@ RunService.RenderStepped:Connect(function()
             end
         else
             Settings.CurrentTarget = nil
+            lockedTargetChar = nil
+            lockedTarget = nil
         end
     else
         Settings.CurrentTarget = nil
+        lockedTargetChar = nil
+        lockedTarget = nil
     end
 end)
 
@@ -1059,6 +1098,8 @@ UserInputService.InputBegan:Connect(function(input, gp)
         Settings.AimbotEnabled = not Settings.AimbotEnabled
         if not Settings.AimbotEnabled then
             Settings.CurrentTarget = nil
+            lockedTargetChar = nil
+            lockedTarget = nil
         end
     elseif input.KeyCode == Enum.KeyCode.X and Settings.NaoyaEnabled then
         StartBarrage()
@@ -1189,12 +1230,10 @@ RunService.Heartbeat:Connect(function()
     local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("Head")
     if not root then return end
 
-    -- ОТСЛЕЖИВАНИЕ УРОНА ДЛЯ СТАНА
     if humanoid and humanoid.Health ~= lastHealth then
         local damageTaken = lastHealth - humanoid.Health
         if damageTaken >= 1.9 and not Settings.Frozen and not Settings.BloodlustAnimationActive then
             
-            -- Определяем длительность стана (0.5 если есть бафф, иначе 0.7)
             local stunDuration = 0.7
             if Settings.BloodlustBuffActive and Settings.BloodlustKnifeActive then
                 stunDuration = 0.5
@@ -1206,7 +1245,6 @@ RunService.Heartbeat:Connect(function()
         lastHealth = humanoid.Health
     end
 
-    -- Проверка окончания стана
     if Settings.DamageStun and currentTime >= Settings.DamageStunEndTime then
         Settings.DamageStun = false
     end
@@ -1246,7 +1284,6 @@ RunService.Heartbeat:Connect(function()
         return
     end
 
-    -- Кулдауны тикают всегда
     if Settings.BarrageCooldown > 0 then
         Settings.BarrageCooldown = Settings.BarrageCooldown - dt
     end
@@ -1257,23 +1294,16 @@ RunService.Heartbeat:Connect(function()
         Settings.BloodlustCooldown = Settings.BloodlustCooldown - dt
     end
 
-    -- ===== БАФФЫ ОТ ТАНТО =====
     if Settings.BloodlustKnifeActive then
         if Settings.BloodlustBuffActive then
-            -- УДАЧНЫЙ КАУНТЕР: меняем гравитацию для высоких прыжков
-            workspace.Gravity = 120  -- МЕНЯЙ ТУТ ЦИФРУ (196 - норма, 120 - высоко, 80 - очень высоко)
-            
-            -- БАЗОВАЯ СКОРОСТЬ 35 (только при удачном)
+            workspace.Gravity = 120
             if not Settings.SpeedBoostActive then
                 Settings.CurrentSpeed = 35
             end
         else
-            -- НЕУДАЧНЫЙ КАУНТЕР: возвращаем обычную гравитацию
             workspace.Gravity = 196
-            -- Скорость НЕ меняем
         end
     else
-        -- НОЖА НЕТ: обычная гравитация
         workspace.Gravity = 196
         if not Settings.SpeedBoostActive and Settings.CurrentSpeed < 25 then
             Settings.CurrentSpeed = 25
@@ -1356,7 +1386,6 @@ RunService.Heartbeat:Connect(function()
         return
     end
 
-    -- Если в стане, пропускаем логику скорости
     if Settings.DamageStun then
         return
     end
@@ -1408,7 +1437,6 @@ RunService.Heartbeat:Connect(function()
         end
     elseif not Settings.SpeedBoostActive and Settings.CurrentSpeed > 25 then
         if Settings.BloodlustBuffActive and Settings.BloodlustKnifeActive then
-            -- Если есть бафф, скорость не падает ниже 35
             Settings.CurrentSpeed = math.max(Settings.CurrentSpeed - DECEL_RATE * dt, 35)
         else
             Settings.CurrentSpeed = math.max(Settings.CurrentSpeed - DECEL_RATE * dt, 25)
@@ -1603,7 +1631,7 @@ local Info = Instance.new("TextLabel")
 Info.Size = UDim2.new(0.9, 0, 0, 80)
 Info.Position = UDim2.new(0.05, 0, 0, 200)
 Info.BackgroundTransparency = 1
-Info.Text = "C - PROJECTION\nX - BARRAGE\nZ - GREATEST HIGH\nV - BLOODLUST"
+Info.Text = "C - PROJECTION\nX - BARRAGE\nZ - GREATEST HIGH (30 RADIUS)\nV - BLOODLUST\nE - AIM (LOCKS ON TARGET)"
 Info.TextColor3 = Color3.fromRGB(150, 150, 150)
 Info.TextXAlignment = Enum.TextXAlignment.Left
 Info.Font = Enum.Font.Gotham
