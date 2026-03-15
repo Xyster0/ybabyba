@@ -1,5 +1,5 @@
 --[[
-    TRUE HEAD OF THE HEI - ЭФФЕКТЫ РАБОТАЮТ + СБИВАНИЕ
+    TRUE HEAD OF THE HEI - ЭФФЕКТЫ РАБОТАЮТ + СБИВАНИЕ + BLOODLUST
 ]]
 
 -- Сервисы
@@ -8,6 +8,7 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
@@ -25,7 +26,7 @@ local function KillScript()
     if gui then
         gui:Destroy()
     end
-    
+
     local notification = Instance.new("Message")
     notification.Text = "TRUE HEAD OF THE HEI: Ultimate must be 'Vengeance'! Скрипт выключен."
     notification.Parent = workspace
@@ -87,8 +88,20 @@ local Settings = {
     BarrageActive = false,
     CurrentTarget = nil,
     DamageStun = false,
+    DamageStunEndTime = 0,
+    DamageStunDuration = 0.7,
     WasMoving = false,
-    KillAnimationActive = false
+    KillAnimationActive = false,
+    -- Bloodlust (V)
+    BloodlustActive = false,
+    BloodlustAnimationActive = false,
+    BloodlustCounterSuccess = false,
+    BloodlustKnifeActive = false,
+    BloodlustKnifeStartTime = 0,
+    BloodlustKnifeDuration = 0,
+    BloodlustCooldown = 0,
+    BloodlustCooldownDuration = 45,
+    BloodlustBuffActive = false -- true = удачный каунтер (25 сек), false = неудачный (15 сек)
 }
 
 -- Переменные
@@ -102,6 +115,10 @@ local CooldownLabel = nil
 local BarrageLabel = nil
 local GreatestHighLabel = nil
 local TimerLabel = nil
+local BloodlustLabel = nil
+
+-- Для отслеживания получения урона
+local lastHealth = 100
 
 -- ===== ЭФФЕКТ ЭКРАНА =====
 local ScreenEffect = Instance.new("Frame")
@@ -116,7 +133,6 @@ ScreenEffect.Visible = true
 
 local function SetScreenEffect(intensity)
     ScreenEffect.BackgroundTransparency = 1 - math.clamp(intensity, 0, 1)
-    print("ЭФФЕКТ УСТАНОВЛЕН:", intensity, "ПРОЗРАЧНОСТЬ:", ScreenEffect.BackgroundTransparency)
 end
 
 -- ===== АНИМАЦИИ =====
@@ -127,21 +143,21 @@ local Humanoid = nil
 local function LoadAnimation(animId, looped)
     local char = LocalPlayer.Character
     if not char then return end
-    
+
     local humanoid = char:FindFirstChild("Humanoid")
     if not humanoid then return end
-    
+
     if CurrentAnimation and CurrentAnimation.IsPlaying then
         CurrentAnimation:Stop()
         CurrentAnimation = nil
     end
-    
+
     local anim = Instance.new("Animation")
     anim.AnimationId = "rbxassetid://" .. animId
-    
+
     local track = humanoid:LoadAnimation(anim)
     track.Looped = looped or false
-    
+
     return track
 end
 
@@ -176,14 +192,14 @@ end
 local function CreatePhantom(pos)
     local char = LocalPlayer.Character
     if not char then return end
-    
+
     local phantomFolder = Instance.new("Model")
     phantomFolder.Parent = workspace
     phantomFolder.Name = "GreatestHighPhantom"
-    
+
     local primary = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("Head")
     local offset = primary and (primary.Position - pos) or Vector3.new(0,0,0)
-    
+
     for _, part in pairs(char:GetChildren()) do
         if part:IsA("BasePart") and part.Transparency < 1 then
             local phantom = Instance.new("Part")
@@ -196,12 +212,12 @@ local function CreatePhantom(pos)
             phantom.Color = Color3.fromRGB(150, 150, 255)
             phantom.Transparency = 0.3
             phantom.Parent = phantomFolder
-            
+
             local tween = TweenService:Create(phantom, TweenInfo.new(1, Enum.EasingStyle.Linear), {Transparency = 1})
             tween:Play()
         end
     end
-    
+
     Debris:AddItem(phantomFolder, 1.1)
 end
 
@@ -212,7 +228,7 @@ local function CreateTapGUI()
         tapGui:Destroy()
         tapGui = nil
     end
-    
+
     tapGui = Instance.new("Frame")
     tapGui.Size = UDim2.new(0, 250, 0, 100)
     tapGui.Position = UDim2.new(1, -260, 1, -110)
@@ -221,11 +237,11 @@ local function CreateTapGUI()
     tapGui.BorderSizePixel = 0
     tapGui.Visible = false
     tapGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-    
+
     local corner = Instance.new("UICorner")
     corner.CornerRadius = UDim.new(0, 10)
     corner.Parent = tapGui
-    
+
     local statusText = Instance.new("TextLabel")
     statusText.Size = UDim2.new(1, 0, 0.5, 0)
     statusText.Position = UDim2.new(0, 0, 0, 0)
@@ -235,7 +251,7 @@ local function CreateTapGUI()
     statusText.TextScaled = true
     statusText.Font = Enum.Font.GothamBold
     statusText.Parent = tapGui
-    
+
     local timerText = Instance.new("TextLabel")
     timerText.Size = UDim2.new(1, 0, 0.5, 0)
     timerText.Position = UDim2.new(0, 0, 0.5, 0)
@@ -245,14 +261,14 @@ local function CreateTapGUI()
     timerText.TextScaled = true
     timerText.Font = Enum.Font.GothamBold
     timerText.Parent = tapGui
-    
+
     return tapGui, statusText, timerText
 end
 
 -- Обновление всплывающего GUI
 local function UpdateTapGUI()
     if not tapGui then CreateTapGUI() end
-    
+
     local statusText = tapGui:FindFirstChildOfClass("TextLabel")
     local timerText = nil
     for _, child in pairs(tapGui:GetChildren()) do
@@ -261,9 +277,9 @@ local function UpdateTapGUI()
             break
         end
     end
-    
+
     if not statusText or not timerText then return end
-    
+
     if Settings.Frozen then
         tapGui.Visible = true
         local timeLeft = math.max(0, Settings.FrozenUntil - tick())
@@ -273,9 +289,10 @@ local function UpdateTapGUI()
         timerText.TextColor3 = Color3.fromRGB(255, 0, 0)
     elseif Settings.DamageStun then
         tapGui.Visible = true
+        local timeLeft = math.max(0, Settings.DamageStunEndTime - tick())
         statusText.Text = "💥 STUNNED 💥"
         statusText.TextColor3 = Color3.fromRGB(255, 165, 0)
-        timerText.Text = "0.7s"
+        timerText.Text = string.format("%.1fs", timeLeft)
         timerText.TextColor3 = Color3.fromRGB(255, 165, 0)
     elseif Settings.BarrageActive then
         tapGui.Visible = true
@@ -294,6 +311,18 @@ local function UpdateTapGUI()
         statusText.Text = "💀 KILL 💀"
         statusText.TextColor3 = Color3.fromRGB(255, 0, 0)
         timerText.Text = ""
+    elseif Settings.BloodlustAnimationActive then
+        tapGui.Visible = true
+        statusText.Text = "🩸 BLOODLUST 🩸"
+        statusText.TextColor3 = Color3.fromRGB(255, 0, 0)
+        timerText.Text = ""
+    elseif Settings.BloodlustKnifeActive then
+        tapGui.Visible = true
+        local timeLeft = math.max(0, Settings.BloodlustKnifeStartTime + Settings.BloodlustKnifeDuration - tick())
+        statusText.Text = "🔪 TANTO 🔪"
+        statusText.TextColor3 = Color3.fromRGB(200, 0, 0)
+        timerText.Text = string.format("%.1fs", timeLeft)
+        timerText.TextColor3 = Color3.fromRGB(255, 200, 200)
     elseif Settings.CurrentSpeed >= 250 then
         tapGui.Visible = true
         statusText.Text = "⚡ MAX SPEED ⚡"
@@ -327,7 +356,7 @@ local function UpdateMainGUI()
     if SpeedLabel then
         SpeedLabel.Text = "SPEED: " .. math.floor(Settings.CurrentSpeed)
     end
-    
+
     if CooldownLabel and Settings.BarrageCooldown > 0 then
         CooldownLabel.Text = "BARRAGE: " .. string.format("%.1f", Settings.BarrageCooldown) .. "s"
         CooldownLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
@@ -335,7 +364,7 @@ local function UpdateMainGUI()
         CooldownLabel.Text = "BARRAGE: READY"
         CooldownLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
     end
-    
+
     if GreatestHighLabel and Settings.GreatestHighCooldown > 0 then
         GreatestHighLabel.Text = "GREATEST: " .. string.format("%.1f", Settings.GreatestHighCooldown) .. "s"
         GreatestHighLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
@@ -343,39 +372,30 @@ local function UpdateMainGUI()
         GreatestHighLabel.Text = "GREATEST: READY"
         GreatestHighLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
     end
-    
+
+    if BloodlustLabel and Settings.BloodlustCooldown > 0 then
+        BloodlustLabel.Text = "BLOODLUST: " .. string.format("%.1f", Settings.BloodlustCooldown) .. "s"
+        BloodlustLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+    elseif BloodlustLabel then
+        BloodlustLabel.Text = "BLOODLUST: READY"
+        BloodlustLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+    end
+
     if BarrageLabel then
         BarrageLabel.Text = Settings.BarrageActive and "⚡ BARRAGE ⚡" or ""
     end
-    
+
     if TimerLabel then
-        if Settings.Frozen then
-            local timeLeft = math.max(0, Settings.FrozenUntil - tick())
-            TimerLabel.Text = string.format("FROZEN: %.1fs", timeLeft)
-            TimerLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
-        elseif Settings.DamageStun then
-            TimerLabel.Text = "STUNNED"
-            TimerLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
-        elseif Settings.BarrageActive then
-            local timeLeft = math.max(0, Settings.BarrageDuration - Settings.BarrageTime)
-            TimerLabel.Text = string.format("BARRAGE: %.1fs", timeLeft)
-            TimerLabel.TextColor3 = Color3.fromRGB(255, 100, 255)
-        elseif Settings.GreatestHighActive then
-            TimerLabel.Text = "GREATEST HIGH"
-            TimerLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
-        elseif Settings.KillAnimationActive then
-            TimerLabel.Text = "KILL ANIMATION"
-            TimerLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
-        elseif Settings.CurrentSpeed >= 250 then
+        if Settings.CurrentSpeed >= 250 then
             TimerLabel.Text = "MAX SPEED"
             TimerLabel.TextColor3 = Color3.fromRGB(0, 255, 255)
         elseif Settings.CWindowActive then
             local timeLeft = math.max(0, Settings.PressWindow - (tick() - Settings.CWindowStart))
-            TimerLabel.Text = string.format("PRESS C! %.1fs", timeLeft)
+            TimerLabel.Text = string.format("TAP C! %.1fs", timeLeft)
             TimerLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
         elseif Settings.CCooldownActive then
             local timeLeft = math.max(0, 2.0 - (tick() - Settings.CWindowStart))
-            TimerLabel.Text = string.format("NEXT: %.1fs", timeLeft)
+            TimerLabel.Text = string.format("%.1fs", timeLeft)
             TimerLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
         else
             TimerLabel.Text = "AWAITING"
@@ -438,7 +458,7 @@ local function GetClosestPlayer()
     local shortestDist = math.huge
     local center = Camera.ViewportSize / 2
     local myRoot = LocalPlayer.Character and (LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or LocalPlayer.Character:FindFirstChild("Torso") or LocalPlayer.Character:FindFirstChild("Head"))
-    
+
     for _, v in pairs(Players:GetPlayers()) do
         if v ~= LocalPlayer and v.Character then
             local humanoid = v.Character:FindFirstChild("Humanoid")
@@ -460,7 +480,7 @@ local function GetClosestPlayer()
             end
         end
     end
-    
+
     return closest
 end
 
@@ -476,36 +496,36 @@ local function StartBarrage()
     if Settings.BarrageActive then return end
     if Settings.BarrageCooldown > 0 then return end
     if Settings.CurrentSpeed < 100 then return end
-    
+    if Settings.BloodlustAnimationActive then return end -- Блокируем во время V
+
     local target = Settings.CurrentTarget or GetClosestPlayer()
     if not target or not IsTargetAlive(target) then return end
-    
+
     local char = LocalPlayer.Character
     if not char then return end
-    
+
     local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("Head")
     local targetRoot = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChild("Torso") or target:FindFirstChild("Head")
-    
+
     if not root or not targetRoot then return end
-    
+
     local distance = (root.Position - targetRoot.Position).Magnitude
     if distance > 15 then return end
-    
+
     Settings.BarrageActive = true
     Settings.BarrageTarget = target
     Settings.BarrageSpeed = Settings.CurrentSpeed
     Settings.BarrageTime = 0
     Settings.BarrageCooldown = Settings.BarrageCooldownDuration
-    
+
     Settings.CWindowActive = false
     Settings.CCooldownActive = false
-    
+
     PlaySound("139820826725306", 0.5)
     SetScreenEffect(0.5)
-    
-    -- АНИМАЦИЯ X СКИЛЛА
+
     PlayAnimation("129678103897608", true)
-    
+
     Settings.stunned = false
 end
 
@@ -515,6 +535,7 @@ local function StartGreatestHigh()
     if Settings.GreatestHighCooldown > 0 then return end
     if not Settings.NaoyaEnabled then return end
     if Settings.CurrentSpeed > 50 then return end
+    if Settings.BloodlustAnimationActive then return end -- Блокируем во время V
 
     local target = Settings.CurrentTarget or GetClosestPlayer()
     if not target or not IsTargetAlive(target) then return end
@@ -539,7 +560,7 @@ local function StartGreatestHigh()
 
     PlaySound("75138797742324", 0.5)
     SetScreenEffect(0.5)
-    
+
     PlayAnimation("120914276661831", false)
 
     local look = targetRoot.CFrame.LookVector
@@ -549,10 +570,10 @@ local function StartGreatestHigh()
     task.delay(0.3, function()
         if root and root.Parent and targetRoot and targetRoot.Parent then
             CreatePhantom(root.Position)
-            
+
             local front = targetRoot.Position + (look * 3)
             root.CFrame = CFrame.new(front, targetRoot.Position)
-            
+
             task.delay(0.1, function()
                 if root and root.Parent then
                     CreatePhantom(front)
@@ -576,6 +597,442 @@ local function ResetSpeed()
     Settings.TimingActive = false
     SetScreenEffect(0)
 end
+
+-- ==================== BLOODLUST (V) ====================
+local BloodlustAnimTrack = nil
+local BloodlustKnifeModel = nil
+local BloodlustWeld = nil
+local BloodlustKnifeConnections = {}
+local oldAnimations = {
+    [1] = "101283990868172",
+    [2] = "108708446862011",
+    [3] = "77583711129628",
+}
+local newAnimations = {
+    [1] = "84359513001979",
+    [2] = "79436586236026",
+    [3] = "102285403332509",
+}
+local animTracks = {}
+
+local function playHitSound()
+    local sound = Instance.new("Sound")
+    sound.SoundId = "rbxassetid://137164188481247"
+    sound.Volume = 1
+    local char = LocalPlayer.Character
+    sound.Parent = char and (char:FindFirstChild("Head") or char)
+    sound:Play()
+    Debris:AddItem(sound, 5)
+end
+
+local function createBloodEffect(part)
+    if not part then return end
+
+    local bloodPoint = Instance.new("Attachment")
+    bloodPoint.Name = "BloodPoint"
+    bloodPoint.Parent = part
+    bloodPoint.Position = Vector3.new(-0.08, 1.83, 0.00)
+
+    local success, result = pcall(function()
+        return ReplicatedStorage.Utils.Todo.Awakening.Blood
+    end)
+
+    if success and result then
+        local bloodTemplate = result:Clone()
+        bloodTemplate.Parent = bloodPoint
+        if bloodTemplate:IsA("ParticleEmitter") then
+            bloodTemplate.Rate = 50
+            bloodTemplate.Enabled = true
+        end
+    else
+        local bloodEmitter = Instance.new("ParticleEmitter")
+        bloodEmitter.Parent = bloodPoint
+        bloodEmitter.Rate = 40
+        bloodEmitter.SpreadAngle = Vector2.new(30, 30)
+        bloodEmitter.Speed = NumberRange.new(3, 7)
+        bloodEmitter.Lifetime = NumberRange.new(0.3, 0.6)
+        bloodEmitter.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+        bloodEmitter.Color = ColorSequence.new(Color3.fromRGB(200, 0, 0))
+        bloodEmitter.Size = NumberSequence.new(0.2)
+        bloodEmitter.Transparency = NumberSequence.new(0.3)
+        bloodEmitter.Enabled = true
+    end
+end
+
+local function createTrail(part)
+    if not part then return end
+
+    local attachment0 = Instance.new("Attachment")
+    local attachment1 = Instance.new("Attachment")
+    attachment0.Parent = part
+    attachment1.Parent = part
+
+    attachment0.Position = Vector3.new(-0.08, 1.83, 0.00)
+    attachment1.Position = Vector3.new(0, -0.4, -0.3)
+
+    local trail = Instance.new("Trail")
+    trail.Name = "KnifeTrail"
+    trail.Attachment0 = attachment0
+    trail.Attachment1 = attachment1
+    trail.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 50, 50)),
+        ColorSequenceKeypoint.new(0.7, Color3.fromRGB(150, 0, 0)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(80, 0, 0))
+    })
+    trail.LightEmission = 1.5
+    trail.Lifetime = 0.25
+    trail.MinLength = 0.2
+    trail.Transparency = NumberSequence.new(0.2)
+    trail.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+    trail.TextureLength = 0.5
+    trail.FaceCamera = true
+    trail.Parent = part
+end
+
+local function removeOldEffects(obj)
+    for _, child in pairs(obj:GetDescendants()) do
+        if child:IsA("Trail") or child:IsA("ParticleEmitter") or child.Name == "BloodPoint" then
+            child:Destroy()
+        end
+    end
+end
+
+local function setupAnimationReplacer()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local humanoid = char:FindFirstChild("Humanoid")
+    if not humanoid then return end
+
+    local animFolder = Instance.new("Folder")
+    animFolder.Name = "ReplacedAnims"
+    animFolder.Parent = char
+
+    for i = 1, 3 do
+        local anim = Instance.new("Animation")
+        anim.AnimationId = "rbxassetid://" .. newAnimations[i]
+        anim.Parent = animFolder
+
+        local track = humanoid:LoadAnimation(anim)
+        animTracks[oldAnimations[i]] = track
+    end
+
+    humanoid.AnimationPlayed:Connect(function(animTrack)
+        if not Settings.BloodlustKnifeActive then return end
+
+        if animTrack and animTrack.Animation then
+            local animId = tostring(animTrack.Animation.AnimationId):match("%d+")
+
+            for idx = 1, 3 do
+                local oldId = oldAnimations[idx]
+                if animId == oldId then
+                    playHitSound()
+
+                    local newTrack = animTracks[oldId]
+                    if newTrack and not newTrack.IsPlaying then
+                        animTrack:Stop()
+                        newTrack:Play()
+                        newTrack.TimePosition = animTrack.TimePosition
+                        newTrack.Speed = animTrack.Speed
+                    end
+                    break
+                end
+            end
+        end
+    end)
+
+    char.ChildAdded:Connect(function(tool)
+        if tool:IsA("Tool") and Settings.BloodlustKnifeActive then
+            tool.Equipped:Connect(function()
+                task.wait(0.1)
+                for _, track in pairs(humanoid:GetPlayingAnimationTracks()) do
+                    if track.Animation then
+                        local animId = tostring(track.Animation.AnimationId):match("%d+")
+                        for idx = 1, 3 do
+                            if animId == oldAnimations[idx] then
+                                track:Stop()
+                                break
+                            end
+                        end
+                    end
+                end
+
+                for i = 1, 3 do
+                    local newTrack = animTracks[oldAnimations[i]]
+                    if newTrack then
+                        newTrack:Play()
+                    end
+                end
+            end)
+
+            tool.Activated:Connect(function()
+                if Settings.BloodlustKnifeActive then
+                    playHitSound()
+
+                    for _, track in pairs(humanoid:GetPlayingAnimationTracks()) do
+                        if track.Animation then
+                            local animId = tostring(track.Animation.AnimationId):match("%d+")
+                            for idx = 1, 3 do
+                                if animId == oldAnimations[idx] then
+                                    local newTrack = animTracks[oldAnimations[idx]]
+                                    if newTrack and not newTrack.IsPlaying then
+                                        track:Stop()
+                                        newTrack:Play()
+                                    end
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+    end)
+
+    local oldState = humanoid.StateChanged
+    humanoid.StateChanged:Connect(function(old, new)
+        if Settings.BloodlustKnifeActive and new == Enum.HumanoidStateType.Physics then
+            task.wait(0.1)
+            for _, track in pairs(humanoid:GetPlayingAnimationTracks()) do
+                if track.Animation then
+                    local animId = tostring(track.Animation.AnimationId):match("%d+")
+                    for idx = 1, 3 do
+                        if animId == oldAnimations[idx] then
+                            playHitSound()
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function removeBloodlustKnife()
+    Settings.BloodlustKnifeActive = false
+    Settings.BloodlustBuffActive = false
+
+    if BloodlustKnifeModel then
+        for _, conn in pairs(BloodlustKnifeConnections) do
+            conn:Disconnect()
+        end
+        BloodlustKnifeConnections = {}
+
+        if BloodlustWeld and BloodlustWeld.Parent then
+            BloodlustWeld:Destroy()
+            BloodlustWeld = nil
+        end
+
+        task.spawn(function()
+            local fadeSteps = 30
+            local stepTime = 0.1
+            for i = 1, fadeSteps do
+                local transparency = i / fadeSteps
+                for _, part in pairs(BloodlustKnifeModel:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Transparency = transparency
+                        part.LocalTransparencyModifier = 0
+                    end
+                    if part:IsA("Decal") or part:IsA("Texture") then
+                        part.Transparency = transparency
+                    end
+                end
+                task.wait(stepTime)
+            end
+            BloodlustKnifeModel:Destroy()
+            BloodlustKnifeModel = nil
+        end)
+    end
+
+    -- Возвращаем обычную гравитацию
+    workspace.Gravity = 196
+end
+
+local function createBloodlustKnife(duration, withBuff)
+    local char = LocalPlayer.Character
+    if not char then return end
+    local rightArm = char:FindFirstChild("Right Arm") or char:FindFirstChild("RightArm")
+    if not rightArm then return end
+
+    removeBloodlustKnife()
+
+    local knifeId = 11058401516
+    local success, knifeObj = pcall(game.GetObjects, game, "rbxassetid://" .. knifeId)
+    if not success or not knifeObj or #knifeObj == 0 then return end
+
+    BloodlustKnifeModel = knifeObj[1]:Clone()
+    BloodlustKnifeModel.Parent = rightArm
+
+    removeOldEffects(BloodlustKnifeModel)
+
+    for _, part in pairs(BloodlustKnifeModel:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.Anchored = false
+            part.CanCollide = false
+            part.Transparency = 0
+            part.LocalTransparencyModifier = 0
+        end
+    end
+
+    local mainPart = BloodlustKnifeModel.PrimaryPart or BloodlustKnifeModel:FindFirstChildWhichIsA("BasePart")
+    if not mainPart then
+        BloodlustKnifeModel:Destroy()
+        BloodlustKnifeModel = nil
+        return
+    end
+
+    createTrail(mainPart)
+    createBloodEffect(mainPart)
+
+    BloodlustWeld = Instance.new("Weld")
+    BloodlustWeld.Part0 = rightArm
+    BloodlustWeld.Part1 = mainPart
+    BloodlustWeld.C0 = CFrame.new(0, -0.90, -0.70) * CFrame.Angles(math.rad(180), math.rad(-90), math.rad(-105))
+    BloodlustWeld.Parent = rightArm
+
+    Settings.BloodlustKnifeActive = true
+    Settings.BloodlustKnifeStartTime = tick()
+    Settings.BloodlustKnifeDuration = duration
+    Settings.BloodlustBuffActive = withBuff  -- true = удачный (25 сек), false = неудачный (15 сек)
+
+    local tool = BloodlustKnifeModel:FindFirstChildOfClass("Tool")
+    if tool then
+        local conn = tool.Activated:Connect(function()
+            playHitSound()
+        end)
+        table.insert(BloodlustKnifeConnections, conn)
+    end
+
+    setupAnimationReplacer()
+
+    task.delay(duration, function()
+        if Settings.BloodlustKnifeActive then
+            removeBloodlustKnife()
+        end
+    end)
+end
+
+local function teleportBehindAttacker(attackerChar)
+    local char = LocalPlayer.Character
+    if not char or not attackerChar then return end
+    local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("Head")
+    local attackerRoot = attackerChar:FindFirstChild("HumanoidRootPart") or attackerChar:FindFirstChild("Torso") or attackerChar:FindFirstChild("Head")
+    if not root or not attackerRoot then return end
+
+    CreatePhantom(root.Position)
+
+    local look = attackerRoot.CFrame.LookVector
+    local behind = attackerRoot.Position - (look * 3) + Vector3.new(0, 1, 0)
+    root.CFrame = CFrame.new(behind, attackerRoot.Position)
+
+    if BloodlustAnimTrack and BloodlustAnimTrack.IsPlaying then
+        BloodlustAnimTrack:Stop()
+    end
+    StopAnimation()
+    Settings.BloodlustAnimationActive = false
+
+    if attackerChar:FindFirstChild("Humanoid") then
+        local attackerHumanoid = attackerChar.Humanoid
+        for _, track in pairs(attackerHumanoid:GetPlayingAnimationTracks()) do
+            track:Stop()
+        end
+    end
+end
+
+local function setupBloodlustCounter()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local humanoid = char:FindFirstChild("Humanoid")
+    local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("Head")
+    if not humanoid or not root then return end
+
+    local listening = true
+    local startHealth = humanoid.Health
+
+    humanoid.WalkSpeed = 0
+
+    task.delay(1.64, function()
+        listening = false
+        if Settings.BloodlustAnimationActive then
+            PlaySound("96188091140381", 0.5)
+            Settings.BloodlustAnimationActive = false
+            StopAnimation()
+            -- НЕУДАЧНЫЙ КАУНТЕР: withBuff = false
+            createBloodlustKnife(15, false)
+            Settings.BloodlustCooldown = Settings.BloodlustCooldownDuration
+        end
+    end)
+
+    local healthConn
+    healthConn = humanoid.HealthChanged:Connect(function(newHealth)
+        if not listening or not Settings.BloodlustAnimationActive then
+            if healthConn then healthConn:Disconnect() end
+            return
+        end
+
+        local damageTaken = startHealth - newHealth
+        if damageTaken > 0 then
+            listening = false
+            Settings.BloodlustCounterSuccess = true
+            Settings.BloodlustAnimationActive = false
+            if healthConn then healthConn:Disconnect() end
+
+            if BloodlustAnimTrack and BloodlustAnimTrack.IsPlaying then
+                BloodlustAnimTrack:Stop()
+            end
+            StopAnimation()
+
+            local attacker = nil
+            local closestDist = 20
+            for _, v in pairs(Players:GetPlayers()) do
+                if v ~= LocalPlayer then
+                    local vChar = v.Character
+                    if vChar and vChar:FindFirstChild("HumanoidRootPart") then
+                        local dist = (vChar.HumanoidRootPart.Position - root.Position).Magnitude
+                        if dist < closestDist then
+                            closestDist = dist
+                            attacker = vChar
+                        end
+                    end
+                end
+            end
+
+            if attacker then
+                PlaySound("136152007714410", 0.5)
+                teleportBehindAttacker(attacker)
+            end
+
+            -- УДАЧНЫЙ КАУНТЕР: withBuff = true
+            createBloodlustKnife(25, true)
+            Settings.BloodlustCooldown = Settings.BloodlustCooldownDuration
+        end
+    end)
+end
+
+local function StartBloodlust()
+    if Settings.BloodlustCooldown > 0 then return end
+    if not Settings.NaoyaEnabled then return end
+    if Settings.BloodlustAnimationActive or Settings.BloodlustKnifeActive then return end
+    if Settings.BarrageActive or Settings.GreatestHighActive then return end
+    if Settings.DamageStun then return end
+
+    local char = LocalPlayer.Character
+    if not char then return end
+    local humanoid = char:FindFirstChild("Humanoid")
+    if not humanoid then return end
+
+    Settings.BloodlustAnimationActive = true
+    Settings.BloodlustCounterSuccess = false
+
+    local anim = Instance.new("Animation")
+    anim.AnimationId = "rbxassetid://139138600357187"
+    BloodlustAnimTrack = humanoid:LoadAnimation(anim)
+    BloodlustAnimTrack:Play()
+
+    humanoid.WalkSpeed = 0
+
+    setupBloodlustCounter()
+end
+-- ======================================================
 
 -- АИМ
 RunService.RenderStepped:Connect(function()
@@ -607,42 +1064,44 @@ UserInputService.InputBegan:Connect(function(input, gp)
         StartBarrage()
     elseif input.KeyCode == Enum.KeyCode.Z and Settings.NaoyaEnabled then
         StartGreatestHigh()
-    elseif input.KeyCode == Enum.KeyCode.C and Settings.NaoyaEnabled and not Settings.Frozen and not Settings.BarrageActive and not Settings.GreatestHighActive and not Settings.DamageStun and not Settings.KillAnimationActive then
+    elseif input.KeyCode == Enum.KeyCode.V and Settings.NaoyaEnabled then
+        StartBloodlust()
+    elseif input.KeyCode == Enum.KeyCode.C and Settings.NaoyaEnabled and not Settings.Frozen and not Settings.BarrageActive and not Settings.GreatestHighActive and not Settings.DamageStun and not Settings.KillAnimationActive and not Settings.BloodlustAnimationActive then
         if Settings.CurrentSpeed >= 250 then return end
-        
+
         if Settings.CWindowActive then
             PlaySound("134671704261165", 0.5)
-            
+
             if Settings.SpeedLevel < 6 then
                 Settings.SpeedLevel = Settings.SpeedLevel + 1
                 Settings.NextTargetSpeed = Settings.SpeedValues[Settings.SpeedLevel]
             end
-            
+
             Settings.SpeedBoostActive = true
             Settings.CWindowActive = false
             Settings.CCooldownActive = true
             Settings.CWindowStart = tick()
-            
+
             if Settings.SpeedLevel == 2 then SetScreenEffect(0.2)
             elseif Settings.SpeedLevel == 3 then SetScreenEffect(0.3)
             elseif Settings.SpeedLevel == 4 then SetScreenEffect(0.4)
             elseif Settings.SpeedLevel == 5 then SetScreenEffect(0.45)
             elseif Settings.SpeedLevel == 6 then SetScreenEffect(0.5)
             end
-            
+
         elseif Settings.CurrentSpeed <= 26 and not Settings.SpeedBoostActive then
             PlaySound("134671704261165", 0.5)
-            
+
             Settings.SpeedBoostActive = true
             Settings.SpeedLevel = 2
             Settings.NextTargetSpeed = 40
             Settings.CCooldownActive = true
             Settings.CWindowStart = tick()
-            
+
             SetScreenEffect(0.2)
         else
             PlaySound("82433875401352", 0.5)
-            
+
             local char = LocalPlayer.Character
             if char then
                 for _, part in pairs(char:GetChildren()) do
@@ -659,7 +1118,7 @@ UserInputService.InputBegan:Connect(function(input, gp)
                     humanoid.PlatformStand = true
                 end
             end
-            
+
             Settings.Frozen = true
             Settings.FrozenUntil = tick() + 1.0
             ResetSpeed()
@@ -673,19 +1132,19 @@ local characterConnections = {}
 
 local function setupCharacter(char)
     if not char then return end
-    
+
     task.wait(1)
-    
+
     if not CheckUltimateName() then
         KillScript()
         return
     end
-    
+
     for _, conn in pairs(characterConnections) do
         conn:Disconnect()
     end
     characterConnections = {}
-    
+
     local humanoid = char:FindFirstChild("Humanoid")
     if humanoid then
         local conn = humanoid.HealthChanged:Connect(function(health)
@@ -703,6 +1162,12 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     if Settings.NaoyaEnabled then
         PerfectNaoyaMorph()
     end
+    Settings.BloodlustAnimationActive = false
+    Settings.BloodlustKnifeActive = false
+    Settings.BloodlustBuffActive = false
+    if BloodlustAnimTrack then BloodlustAnimTrack:Stop() end
+    removeBloodlustKnife()
+    workspace.Gravity = 196
 end)
 
 if LocalPlayer.Character then
@@ -714,19 +1179,41 @@ RunService.Heartbeat:Connect(function()
     local dt = tick() - lastTime
     lastTime = tick()
     local currentTime = tick()
-    
+
     local char = LocalPlayer.Character
     if not char then return end
-    
+
     local humanoid = char:FindFirstChild("Humanoid")
     if not humanoid then return end
-    
+
     local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("Head")
     if not root then return end
-    
+
+    -- ОТСЛЕЖИВАНИЕ УРОНА ДЛЯ СТАНА
+    if humanoid and humanoid.Health ~= lastHealth then
+        local damageTaken = lastHealth - humanoid.Health
+        if damageTaken >= 1.9 and not Settings.Frozen and not Settings.BloodlustAnimationActive then
+            
+            -- Определяем длительность стана (0.5 если есть бафф, иначе 0.7)
+            local stunDuration = 0.7
+            if Settings.BloodlustBuffActive and Settings.BloodlustKnifeActive then
+                stunDuration = 0.5
+            end
+            
+            Settings.DamageStun = true
+            Settings.DamageStunEndTime = currentTime + stunDuration
+        end
+        lastHealth = humanoid.Health
+    end
+
+    -- Проверка окончания стана
+    if Settings.DamageStun and currentTime >= Settings.DamageStunEndTime then
+        Settings.DamageStun = false
+    end
+
     UpdateMainGUI()
     UpdateTapGUI()
-    
+
     if Settings.Frozen then
         if currentTime >= Settings.FrozenUntil then
             for _, part in pairs(Settings.FrozenParts) do
@@ -735,46 +1222,76 @@ RunService.Heartbeat:Connect(function()
                 end
             end
             Settings.FrozenParts = {}
-            
+
             if humanoid then
                 humanoid.WalkSpeed = 25
                 humanoid.JumpPower = 50
                 humanoid.AutoRotate = true
                 humanoid.PlatformStand = false
             end
-            
+
             Settings.Frozen = false
             Settings.CurrentSpeed = 25
         end
         return
     end
-    
+
     if Settings.DamageStun then
         humanoid.WalkSpeed = 0
-        return
     end
-    
+
     if not Settings.NaoyaEnabled then
         Settings.CurrentSpeed = 25
         humanoid.WalkSpeed = 25
         return
     end
-    
+
+    -- Кулдауны тикают всегда
     if Settings.BarrageCooldown > 0 then
         Settings.BarrageCooldown = Settings.BarrageCooldown - dt
     end
     if Settings.GreatestHighCooldown > 0 then
         Settings.GreatestHighCooldown = Settings.GreatestHighCooldown - dt
     end
-    
-    -- БАРРАЖ
+    if Settings.BloodlustCooldown > 0 then
+        Settings.BloodlustCooldown = Settings.BloodlustCooldown - dt
+    end
+
+    -- ===== БАФФЫ ОТ ТАНТО =====
+    if Settings.BloodlustKnifeActive then
+        if Settings.BloodlustBuffActive then
+            -- УДАЧНЫЙ КАУНТЕР: меняем гравитацию для высоких прыжков
+            workspace.Gravity = 120  -- МЕНЯЙ ТУТ ЦИФРУ (196 - норма, 120 - высоко, 80 - очень высоко)
+            
+            -- БАЗОВАЯ СКОРОСТЬ 35 (только при удачном)
+            if not Settings.SpeedBoostActive then
+                Settings.CurrentSpeed = 35
+            end
+        else
+            -- НЕУДАЧНЫЙ КАУНТЕР: возвращаем обычную гравитацию
+            workspace.Gravity = 196
+            -- Скорость НЕ меняем
+        end
+    else
+        -- НОЖА НЕТ: обычная гравитация
+        workspace.Gravity = 196
+        if not Settings.SpeedBoostActive and Settings.CurrentSpeed < 25 then
+            Settings.CurrentSpeed = 25
+        end
+    end
+
+    if Settings.BloodlustAnimationActive then
+        humanoid.WalkSpeed = 0
+        return
+    end
+
     if Settings.BarrageActive and Settings.BarrageTarget then
         local targetRoot = Settings.BarrageTarget:FindFirstChild("HumanoidRootPart") or Settings.BarrageTarget:FindFirstChild("Torso") or Settings.BarrageTarget:FindFirstChild("Head")
         if targetRoot then
             local targetHumanoid = Settings.BarrageTarget:FindFirstChild("Humanoid")
             if targetHumanoid and targetHumanoid.Health > 0 then
                 Settings.BarrageTime = Settings.BarrageTime + dt
-                
+
                 if Settings.BarrageTime >= Settings.BarrageDuration then
                     Settings.BarrageActive = false
                     Settings.BarrageTarget = nil
@@ -789,22 +1306,18 @@ RunService.Heartbeat:Connect(function()
                     humanoid.WalkSpeed = 0
                 end
             else
-                -- ЦЕЛЬ УМЕРЛА
                 PlaySound("126745072633218", 0.5)
-                
-                -- ОСТАНАВЛИВАЕМ X АНИМАЦИЮ
+
                 StopAnimation()
                 SetScreenEffect(0)
-                
-                -- ЖДЕМ 0.5 СЕКУНДЫ И ЗАПУСКАЕМ КИЛЛ АНИМАЦИЮ
+
                 task.delay(0.5, function()
                     if not Settings.BarrageActive then
                         Settings.KillAnimationActive = true
                         local killAnim = PlayAnimation("83842514475555", false)
-                        
-                        -- СБИВАЕМ ДВИЖЕНИЕМ КАК БЫЛО
+
                         if KillAnimationConn then KillAnimationConn:Disconnect() end
-                        
+
                         KillAnimationConn = RunService.Heartbeat:Connect(function()
                             local vel = root.Velocity.Magnitude
                             if vel > 0.5 then
@@ -816,7 +1329,7 @@ RunService.Heartbeat:Connect(function()
                                 end
                             end
                         end)
-                        
+
                         task.delay(2, function()
                             Settings.KillAnimationActive = false
                             if KillAnimationConn then
@@ -826,7 +1339,7 @@ RunService.Heartbeat:Connect(function()
                         end)
                     end
                 end)
-                
+
                 Settings.BarrageActive = false
                 Settings.BarrageTarget = nil
                 Settings.CCooldownActive = true
@@ -842,25 +1355,29 @@ RunService.Heartbeat:Connect(function()
         end
         return
     end
-    
-    -- ПРОВЕРКА НАПРАВЛЕНИЯ
+
+    -- Если в стане, пропускаем логику скорости
+    if Settings.DamageStun then
+        return
+    end
+
     local velocity = root.Velocity
     local lookVector = root.CFrame.LookVector
     local velocityDir = velocity.Magnitude > 0.1 and velocity.Unit or Vector3.new(0,0,0)
     local dotProduct = velocity.Magnitude > 0.1 and lookVector:Dot(velocityDir) or 0
-    
+
     if velocity.Magnitude > 1 and dotProduct < -0.3 then
         ResetSpeed()
         Settings.CWindowActive = false
         Settings.CCooldownActive = false
         SetScreenEffect(0)
     end
-    
+
     local isMoving = velocity.Magnitude > 0.5
-    
+
     if Settings.SpeedBoostActive then
         Settings.CurrentSpeed = math.min(Settings.CurrentSpeed + ACCEL_RATE * dt, Settings.NextTargetSpeed)
-        
+
         if Settings.CurrentSpeed < 250 then
             if Settings.CCooldownActive then
                 if currentTime - Settings.CWindowStart >= 2.0 then
@@ -883,30 +1400,35 @@ RunService.Heartbeat:Connect(function()
             Settings.CCooldownActive = false
         end
     end
-    
+
     if not isMoving then
-        if Settings.CurrentSpeed > 25 then
+        if Settings.CurrentSpeed > 25 and not Settings.BloodlustBuffActive then
             ResetSpeed()
             SetScreenEffect(0)
         end
     elseif not Settings.SpeedBoostActive and Settings.CurrentSpeed > 25 then
-        Settings.CurrentSpeed = math.max(Settings.CurrentSpeed - DECEL_RATE * dt, 25)
+        if Settings.BloodlustBuffActive and Settings.BloodlustKnifeActive then
+            -- Если есть бафф, скорость не падает ниже 35
+            Settings.CurrentSpeed = math.max(Settings.CurrentSpeed - DECEL_RATE * dt, 35)
+        else
+            Settings.CurrentSpeed = math.max(Settings.CurrentSpeed - DECEL_RATE * dt, 25)
+        end
     end
-    
+
     humanoid.WalkSpeed = Settings.CurrentSpeed
 end)
 
 -- ФАНТОМЫ
 local function CreateGhost()
     if Settings.CurrentSpeed < 26 then return end
-    
+
     local char = LocalPlayer.Character
     if not char then return end
-    
+
     local ghostFolder = Instance.new("Model")
     ghostFolder.Parent = workspace
     ghostFolder.Name = "GhostEffect"
-    
+
     for _, part in pairs(char:GetChildren()) do
         if part:IsA("BasePart") and part.Transparency < 1 then
             local ghost = Instance.new("Part")
@@ -921,14 +1443,14 @@ local function CreateGhost()
             ghost.Parent = ghostFolder
         end
     end
-    
+
     for _, part in pairs(ghostFolder:GetChildren()) do
         if part:IsA("BasePart") then
             local tween = TweenService:Create(part, TweenInfo.new(1), {Transparency = 1})
             tween:Play()
         end
     end
-    
+
     Debris:AddItem(ghostFolder, 1.1)
 end
 
@@ -938,7 +1460,7 @@ task.spawn(function()
         if Settings.NaoyaEnabled and Settings.FrameEnabled then
             local speed = Settings.CurrentSpeed
             local waitTime = 0.2
-            
+
             if speed >= 200 then
                 waitTime = 0.02
             elseif speed >= 150 then
@@ -951,7 +1473,7 @@ task.spawn(function()
                 task.wait(0.2)
                 continue
             end
-            
+
             CreateGhost()
             task.wait(waitTime)
         else
@@ -967,8 +1489,8 @@ ScreenGui.Name = "FreestyleGUI"
 ScreenGui.ResetOnSpawn = false
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 340, 0, 250)
-MainFrame.Position = UDim2.new(0, 10, 0.5, -125)
+MainFrame.Size = UDim2.new(0, 340, 0, 280)
+MainFrame.Position = UDim2.new(0, 10, 0.5, -140)
 MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 MainFrame.Active = true
 MainFrame.Draggable = true
@@ -1057,9 +1579,19 @@ GreatestHighLabel.Font = Enum.Font.Gotham
 GreatestHighLabel.TextSize = 12
 GreatestHighLabel.Parent = MainFrame
 
+BloodlustLabel = Instance.new("TextLabel")
+BloodlustLabel.Size = UDim2.new(0.9, 0, 0, 20)
+BloodlustLabel.Position = UDim2.new(0.05, 0, 0, 160)
+BloodlustLabel.BackgroundTransparency = 1
+BloodlustLabel.Text = "BLOODLUST: READY"
+BloodlustLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+BloodlustLabel.Font = Enum.Font.Gotham
+BloodlustLabel.TextSize = 12
+BloodlustLabel.Parent = MainFrame
+
 BarrageLabel = Instance.new("TextLabel")
 BarrageLabel.Size = UDim2.new(0.9, 0, 0, 20)
-BarrageLabel.Position = UDim2.new(0.05, 0, 0, 160)
+BarrageLabel.Position = UDim2.new(0.05, 0, 0, 180)
 BarrageLabel.BackgroundTransparency = 1
 BarrageLabel.Text = ""
 BarrageLabel.TextColor3 = Color3.fromRGB(255, 100, 255)
@@ -1068,10 +1600,10 @@ BarrageLabel.TextSize = 12
 BarrageLabel.Parent = MainFrame
 
 local Info = Instance.new("TextLabel")
-Info.Size = UDim2.new(0.9, 0, 0, 70)
-Info.Position = UDim2.new(0.05, 0, 0, 180)
+Info.Size = UDim2.new(0.9, 0, 0, 80)
+Info.Position = UDim2.new(0.05, 0, 0, 200)
 Info.BackgroundTransparency = 1
-Info.Text = "C - ускорение\nX - BARRAGE\nZ - GREATEST HIGH"
+Info.Text = "C - PROJECTION\nX - BARRAGE\nZ - GREATEST HIGH\nV - BLOODLUST"
 Info.TextColor3 = Color3.fromRGB(150, 150, 150)
 Info.TextXAlignment = Enum.TextXAlignment.Left
 Info.Font = Enum.Font.Gotham
